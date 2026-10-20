@@ -1,0 +1,706 @@
+<title>死角トレーニング</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;800&display=swap">
+<style>
+/* Layout: full-screen first-person pitch, HUD floats at the edges (single dark look, like a stadium at night) */
+:root {
+  --pitch: #0e2a1c;
+  --ink: #f2f7ef;
+  --ink-dim: #b9cdbf;
+  --panel: rgba(8, 22, 15, 0.84);
+  --card: #12301f;
+  --line: #3c6b52;
+  --accent: #ffd23f;
+  --opp: #e2474b;
+  --mate: #3d8bff;
+  --good: #5ee08a;
+  --mid: #ffd23f;
+  --bad: #ff7a6e;
+  --font: "M PLUS Rounded 1c", "Hiragino Maru Gothic ProN", "Hiragino Sans", system-ui, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; overflow: hidden; background: var(--pitch); color: var(--ink);
+  font-family: var(--font); touch-action: none; user-select: none; -webkit-user-select: none;
+}
+#view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+
+.hud-top {
+  position: fixed; top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: calc(env(safe-area-inset-left, 0px) + 12px);
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; pointer-events: none;
+}
+.hud-top .stack { display: grid; gap: 6px; justify-items: start; }
+.tag {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 6px 10px; font-size: 13px; line-height: 1.4; max-width: 60ch;
+}
+.tag b { color: var(--accent); font-weight: 800; }
+#mic.on b { color: var(--good); }
+#heard { font-size: 15px; font-weight: 800; }
+.btn {
+  pointer-events: auto; font: inherit; font-weight: 800; font-size: 14px; color: var(--ink);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer;
+}
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn.primary { background: var(--accent); color: #1b1600; border-color: var(--accent); }
+.btn.sel { border-color: var(--accent); color: var(--accent); }
+
+#minimap {
+  position: fixed; right: calc(env(safe-area-inset-right, 0px) + 12px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  width: 170px; height: 150px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
+}
+#joyBase, #joyKnob { position: fixed; border-radius: 50%; pointer-events: none; transform: translate(-50%, -50%); }
+#joyBase { width: 120px; height: 120px; border: 2px solid rgba(242,247,239,.35); background: rgba(8,22,15,.35); }
+#joyKnob { width: 52px; height: 52px; background: rgba(255,210,63,.85); }
+.hint {
+  position: fixed; left: calc(env(safe-area-inset-left, 0px) + 12px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  font-size: 12px; color: var(--ink-dim); background: var(--panel); border-radius: 8px; padding: 5px 9px; pointer-events: none;
+}
+#calls {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); display: flex; gap: 10px;
+}
+#calls .btn { font-size: 18px; padding: 12px 20px; }
+#banner {
+  position: fixed; left: 50%; top: 22%; transform: translateX(-50%);
+  font-size: 34px; font-weight: 800; text-shadow: 0 2px 10px rgba(0,0,0,.6); pointer-events: none; white-space: nowrap;
+}
+
+.overlay {
+  position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; overflow-y: auto;
+  background: rgba(6, 18, 12, 0.88);
+}
+.card {
+  max-width: 520px; width: 100%; background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  padding: 22px 20px; display: grid; gap: 14px;
+}
+.card h1, .card h2 { margin: 0; font-weight: 800; text-wrap: balance; }
+.card h1 { font-size: 26px; }
+.card h1 span { color: var(--accent); }
+.card h2 { font-size: 22px; }
+.card p { margin: 0; font-size: 14px; line-height: 1.7; color: var(--ink-dim); }
+.card ul { margin: 0; padding-left: 1.2em; font-size: 14px; line-height: 1.8; }
+.card .say { color: var(--accent); font-weight: 800; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; }
+.row .btn { flex: 1 1 140px; padding: 12px; font-size: 16px; }
+.levels { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 14px; }
+.levels .btn { padding: 6px 12px; }
+#note { font-size: 13px; color: var(--accent); min-height: 1em; }
+
+#result .card { max-width: 640px; }
+.res-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 560px) { .res-grid { grid-template-columns: minmax(0, 1fr); } }
+#replay { width: 100%; aspect-ratio: 4 / 3.4; max-width: 100%; border-radius: 10px; border: 1px solid var(--line); background: #0b2216; }
+.items { display: grid; gap: 8px; align-content: start; }
+.item { display: grid; grid-template-columns: 2.2em minmax(0, 1fr); gap: 8px; align-items: start; font-size: 14px; line-height: 1.5; }
+.mark { font-size: 20px; font-weight: 800; text-align: center; line-height: 1.2; }
+.mark.g { color: var(--good); } .mark.m { color: var(--mid); } .mark.b { color: var(--bad); }
+.item small { display: block; color: var(--ink-dim); font-size: 12.5px; }
+.tally { font-size: 13px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<canvas id="view"></canvas>
+
+<div class="hud-top">
+  <div class="stack">
+    <div class="tag" id="task"><b>ワンサイドカット</b>　首を振って、危ない受け手へのパスコースを切りながら寄せよう</div>
+    <div class="tag" id="mic"><b>声：</b><span id="micText">準備中</span></div>
+    <div class="tag" id="heard" hidden></div>
+  </div>
+  <div class="stack" style="justify-items:end">
+    <button class="btn" id="recenter" type="button">正面に戻す</button>
+    <div class="tag tally" id="tally">0本中 0本成功</div>
+  </div>
+</div>
+<div id="banner" hidden></div>
+<canvas id="minimap" width="340" height="300"></canvas>
+<div class="hint" id="hint">左でスティック移動 ・ 右をドラッグで見回す</div>
+<div id="calls" hidden>
+  <button class="btn" type="button" data-call="L">左いけ！</button>
+  <button class="btn" type="button" data-call="R">右いけ！</button>
+</div>
+<div id="joyBase" hidden></div>
+<div id="joyKnob" hidden></div>
+
+<div id="start" class="overlay">
+  <div class="card">
+    <h1>死角<span>トレーニング</span></h1>
+    <p>あなたはディフェンス。前の相手にボールが渡ります。左右に相手の受け手が2人、後ろに味方が1人います。</p>
+    <ul>
+      <li>ボールが来る前に首を振って、どっちの受け手が<b>危ないか</b>（前に出ている方）を見つけよう</li>
+      <li>そっちへのパスコースを体で切りながら寄せよう（ワンサイドカット）</li>
+      <li>反対側の受け手は味方にまかせる。声で <span class="say">「左いけ！」</span> <span class="say">「右いけ！」</span></li>
+      <li>寄せすぎて飛び込むと、かわされるよ</li>
+    </ul>
+    <div class="levels">レベル
+      <button class="btn sel" type="button" data-level="1">1</button>
+      <button class="btn" type="button" data-level="2">2</button>
+      <button class="btn" type="button" data-level="3">3</button>
+      <span id="levelNote" style="color:var(--ink-dim)">危ない受け手に印が出る・相手はゆっくり</span>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="startGyro" type="button">ジャイロで始める</button>
+      <button class="btn" id="startTouch" type="button">タッチ操作で始める</button>
+    </div>
+    <div id="note"></div>
+  </div>
+</div>
+
+<div id="result" class="overlay" hidden>
+  <div class="card">
+    <h2 id="resTitle">結果</h2>
+    <p id="resWhy"></p>
+    <div class="res-grid">
+      <canvas id="replay" width="560" height="476"></canvas>
+      <div class="items" id="items"></div>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="next" type="button">次の1本</button>
+      <button class="btn" id="toMenu" type="button">レベルを変える</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const deg = Math.PI / 180;
+
+  // ---------- scene ----------
+  const canvas = $('view');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x9fc7e8);
+  scene.fog = new THREE.Fog(0x9fc7e8, 40, 110);
+  const camera = new THREE.PerspectiveCamera(70, 1, 0.05, 200);
+  const EYE = 1.4; // 10歳の目の高さ（m）
+
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x2a5a2a, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.6);
+  sun.position.set(10, 30, 10);
+  scene.add(sun);
+
+  // coordinate system: +z is toward the goal we defend (z = 26). yaw 0 = facing +z
+  const FW = 68, FL = 52;
+  const tex = (() => {
+    const c = document.createElement('canvas'); c.width = 1024; c.height = 784;
+    const g = c.getContext('2d'), sx = c.width / FW, sz = c.height / FL;
+    for (let i = 0; i < 13; i++) { g.fillStyle = i % 2 ? '#2f7a32' : '#378636'; g.fillRect(0, i * c.height / 13, c.width, c.height / 13 + 1); }
+    g.strokeStyle = 'rgba(255,255,255,.9)'; g.lineWidth = 4;
+    const X = x => (x + FW / 2) * sx, Z = z => (z + FL / 2) * sz;
+    g.strokeRect(X(-FW / 2) + 2, Z(-FL / 2) + 2, FW * sx - 4, FL * sz - 4);
+    g.strokeRect(X(-20.15), Z(26 - 16.5), 40.3 * sx, 16.5 * sz);   // penalty area
+    g.strokeRect(X(-9.15), Z(26 - 5.5), 18.3 * sx, 5.5 * sz);      // goal area
+    g.beginPath(); g.arc(X(0), Z(26 - 11), 3, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill();
+    g.beginPath(); g.arc(X(0), Z(-26), 9.15 * sx, 0, Math.PI); g.stroke();
+    const t = new THREE.CanvasTexture(c); t.anisotropy = 8; return t;
+  })();
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(FW, FL), new THREE.MeshLambertMaterial({ map: tex }));
+  ground.rotation.x = -Math.PI / 2; scene.add(ground);
+  const outer = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshLambertMaterial({ color: 0x2c6a2e }));
+  outer.rotation.x = -Math.PI / 2; outer.position.y = -0.01; scene.add(outer);
+  (() => {
+    const m = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    const post = new THREE.CylinderGeometry(0.06, 0.06, 2.44, 10);
+    [-3.66, 3.66].forEach(x => { const p = new THREE.Mesh(post, m); p.position.set(x, 1.22, 26); scene.add(p); });
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 7.32, 10), m);
+    bar.rotation.z = Math.PI / 2; bar.position.set(0, 2.44, 26); scene.add(bar);
+    const net = new THREE.Mesh(new THREE.PlaneGeometry(7.32, 2.44), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.18, side: THREE.DoubleSide }));
+    net.position.set(0, 1.22, 27.5); scene.add(net);
+  })();
+
+  // ---------- players ----------
+  function label(text, color) {
+    const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+    const g = c.getContext('2d');
+    g.fillStyle = 'rgba(0,0,0,.55)'; g.beginPath(); g.roundRect ? g.roundRect(8, 8, 240, 48, 14) : g.rect(8, 8, 240, 48); g.fill();
+    g.fillStyle = color; g.font = 'bold 30px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 128, 33);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+    s.scale.set(1.8, 0.45, 1); return s;
+  }
+  function makePlayer(shirt, text, textColor) {
+    const g = new THREE.Group();
+    const skin = new THREE.MeshLambertMaterial({ color: 0xe9c29b });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.17, 0.62, 14), new THREE.MeshLambertMaterial({ color: shirt }));
+    body.position.y = 1.0; g.add(body);
+    const shorts = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.2, 14), new THREE.MeshLambertMaterial({ color: 0x1d1d1d }));
+    shorts.position.y = 0.62; g.add(shorts);
+    const legs = [-0.08, 0.08].map(x => {
+      const pivot = new THREE.Group(); pivot.position.set(x, 0.55, 0); g.add(pivot);
+      const l = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.05, 0.55, 8), skin); l.position.y = -0.27; pivot.add(l);
+      return pivot;
+    });
+    const head = new THREE.Group(); head.position.y = 1.47; g.add(head);
+    head.add(new THREE.Mesh(new THREE.SphereGeometry(0.13, 16, 12), skin));
+    const eyes = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.04, 0.04), new THREE.MeshBasicMaterial({ color: 0x111111 }));
+    eyes.position.set(0, 0.02, 0.12); head.add(eyes);
+    const tagS = label(text, textColor); tagS.position.y = 1.95; g.add(tagS);
+    const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.32, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }));
+    shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.01; g.add(shadow);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.7, 32), new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0.85 }));
+    ring.rotation.x = -Math.PI / 2; ring.position.y = 0.02; ring.visible = false; g.add(ring);
+    scene.add(g);
+    return { g, head, legs, ring, pos: new THREE.Vector3(), facing: 0, headYaw: 0 };
+  }
+  const holder = makePlayer(0xe2474b, '相手（ボール）', '#ff8f8f');
+  const recv = { L: makePlayer(0xe2474b, '相手', '#ff8f8f'), R: makePlayer(0xe2474b, '相手', '#ff8f8f') };
+  const mate = makePlayer(0x3d8bff, '味方', '#9cc4ff');
+  const others = [holder, recv.L, recv.R, mate];
+  const ball = new THREE.Mesh(new THREE.SphereGeometry(0.11, 18, 14), new THREE.MeshLambertMaterial({ color: 0xffffff }));
+  scene.add(ball);
+
+  const me = { pos: new THREE.Vector3(0, 0, 6), vel: new THREE.Vector3() };
+  const MAX_SPEED = 4.6; // m/s
+
+  // ---------- look: gyro or drag ----------
+  let mode = 'touch', devOri = null, yawOffset = 0, dragPitch = -0.08, needsRecenter = true;
+  const zee = new THREE.Vector3(0, 0, 1), yAxis = new THREE.Vector3(0, 1, 0);
+  const euler = new THREE.Euler(), q0 = new THREE.Quaternion(), qYaw = new THREE.Quaternion();
+  const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+  function screenAngle() {
+    if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle * deg;
+    return (window.orientation || 0) * deg;
+  }
+  function onOri(e) { if (e.alpha !== null) devOri = e; }
+  // look yaw: 0 = looking toward -z (toward the attackers)
+  function cameraYaw() {
+    const d = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+    return Math.atan2(-d.x, -d.z);
+  }
+  function yawTo(p) { return Math.atan2(-(p.x - me.pos.x), -(p.z - me.pos.z)); }
+  function applyLook() {
+    if (mode === 'gyro' && devOri) {
+      euler.set(devOri.beta * deg, devOri.alpha * deg, -devOri.gamma * deg, 'YXZ');
+      camera.quaternion.setFromEuler(euler);
+      camera.quaternion.multiply(q1);
+      camera.quaternion.multiply(q0.setFromAxisAngle(zee, -screenAngle()));
+      if (needsRecenter) { yawOffset = -cameraYaw() + yawTo(holder.pos); needsRecenter = false; }
+      qYaw.setFromAxisAngle(yAxis, yawOffset);
+      camera.quaternion.premultiply(qYaw);
+    } else {
+      if (needsRecenter) { yawOffset = yawTo(holder.pos); dragPitch = -0.08; needsRecenter = false; }
+      camera.quaternion.setFromEuler(new THREE.Euler(dragPitch, yawOffset, 0, 'YXZ'));
+    }
+  }
+  const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+
+  // ---------- input ----------
+  const joy = { id: null, ox: 0, oy: 0, x: 0, y: 0 }, drag = { id: null, lx: 0, ly: 0 };
+  const joyBase = $('joyBase'), joyKnob = $('joyKnob'), JR = 60;
+  function setJoy(px, py) {
+    let dx = px - joy.ox, dy = py - joy.oy; const L = Math.hypot(dx, dy);
+    if (L > JR) { dx *= JR / L; dy *= JR / L; }
+    joy.x = dx / JR; joy.y = dy / JR;
+    joyKnob.style.left = (joy.ox + dx) + 'px'; joyKnob.style.top = (joy.oy + dy) + 'px';
+  }
+  canvas.addEventListener('pointerdown', e => {
+    canvas.setPointerCapture(e.pointerId);
+    if (e.clientX < innerWidth * 0.45 && joy.id === null) {
+      joy.id = e.pointerId; joy.ox = e.clientX; joy.oy = e.clientY;
+      joyBase.style.left = e.clientX + 'px'; joyBase.style.top = e.clientY + 'px';
+      joyBase.hidden = joyKnob.hidden = false; setJoy(e.clientX, e.clientY);
+    } else if (drag.id === null) { drag.id = e.pointerId; drag.lx = e.clientX; drag.ly = e.clientY; }
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (e.pointerId === joy.id) setJoy(e.clientX, e.clientY);
+    else if (e.pointerId === drag.id) {
+      yawOffset -= (e.clientX - drag.lx) * 0.006;
+      if (mode !== 'gyro') dragPitch = Math.max(-1.2, Math.min(1.0, dragPitch - (e.clientY - drag.ly) * 0.004));
+      drag.lx = e.clientX; drag.ly = e.clientY;
+    }
+  });
+  const release = e => {
+    if (e.pointerId === joy.id) { joy.id = null; joy.x = joy.y = 0; joyBase.hidden = joyKnob.hidden = true; }
+    if (e.pointerId === drag.id) drag.id = null;
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  const keys = {};
+  addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (e.code === 'KeyQ') makeCall('L', 'キー'); if (e.code === 'KeyE') makeCall('R', 'キー');
+  });
+  addEventListener('keyup', e => { keys[e.code] = false; });
+  $('recenter').addEventListener('click', () => { needsRecenter = true; });
+
+  // ---------- voice ----------
+  // The teammate goes to the side you name: 「左いけ！」→ 味方が左の受け手へ
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, voiceOn = false;
+  function setMic(text, on) { $('micText').textContent = text; $('mic').classList.toggle('on', !!on); }
+  function showButtons() { $('calls').hidden = false; }
+  function parseSide(txt) {
+    const l = /左|ひだり|レフト/.test(txt), r = /右|みぎ|ライト/.test(txt);
+    if (l && !r) return 'L'; if (r && !l) return 'R'; return null;
+  }
+  let heardTimer = 0;
+  function showHeard(txt) {
+    $('heard').textContent = '聞こえた：「' + txt + '」'; $('heard').hidden = false;
+    clearTimeout(heardTimer); heardTimer = setTimeout(() => { $('heard').hidden = true; }, 1800);
+  }
+  function startVoice() {
+    if (!SR) { setMic('この画面では使えません。下のボタンで指示してね', false); showButtons(); return; }
+    try {
+      rec = new SR(); rec.lang = 'ja-JP'; rec.continuous = true; rec.interimResults = true;
+      rec.onstart = () => { voiceOn = true; setMic('聞き取り中', true); };
+      rec.onresult = e => {
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          const txt = e.results[i][0].transcript.trim(); if (!txt) continue;
+          showHeard(txt);
+          const s = parseSide(txt); if (s) makeCall(s, '声');
+        }
+      };
+      rec.onerror = e => {
+        if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture') {
+          voiceOn = false; setMic('マイクが使えません。下のボタンで指示してね', false); showButtons();
+        }
+      };
+      rec.onend = () => { if (voiceOn) { try { rec.start(); } catch (_) {} } };
+      rec.start();
+      setTimeout(() => { if (!voiceOn) { setMic('マイクが使えません。下のボタンで指示してね', false); showButtons(); } }, 3000);
+    } catch (_) { setMic('この画面では使えません。下のボタンで指示してね', false); showButtons(); }
+  }
+  document.querySelectorAll('#calls [data-call]').forEach(b => b.addEventListener('click', () => makeCall(b.dataset.call, 'ボタン')));
+
+  // ---------- drill ----------
+  const LEVELS = {
+    1: { decide: 3.2, hint: true, note: '危ない受け手に印が出る・相手はゆっくり' },
+    2: { decide: 2.5, hint: false, note: '印なし・相手の判断がふつう' },
+    3: { decide: 1.8, hint: false, note: '印なし・相手の判断が速い' },
+  };
+  let level = 1;
+  document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => {
+    level = +b.dataset.level;
+    document.querySelectorAll('[data-level]').forEach(x => x.classList.toggle('sel', x === b));
+    $('levelNote').textContent = LEVELS[level].note;
+  }));
+  const tally = { n: 0, ok: 0 };
+  let rep = null;
+  const BALL_TRAVEL = 1.3; // s, ball travelling to the holder before he can decide
+
+  function newRep() {
+    const side = Math.random() < 0.5 ? 'L' : 'R';
+    const sx = { L: -1, R: 1 };
+    rep = {
+      phase: 'incoming', t: 0, side, live: 0,
+      decideAt: LEVELS[level].decide * (0.85 + Math.random() * 0.3),
+      call: null, callT: null, callBy: null,
+      seen: { L: false, R: false, M: false }, seenBeforeBall: 0,
+      decision: null, passTo: null, passT: 0, passFrom: null,
+      nearSpeed: 0, distAtDecision: 0, outcome: null, rec: [], recT: 0,
+    };
+    holder.pos.set(0, 0, -6); holder.facing = 0; holder.headYaw = 0;
+    for (const s of ['L', 'R']) {
+      const danger = s === side;
+      recv[s].pos.set(sx[s] * (danger ? 10 : 12), 0, danger ? 0 : -3);
+      recv[s].ring.visible = danger && LEVELS[level].hint;
+    }
+    me.pos.set((Math.random() - 0.5) * 4, 0, 6.5); me.vel.set(0, 0, 0);
+    mate.pos.set(-sx[side] * 3, 0, 5); mate.target = null;
+    ball.position.set(0, 0.11, -24);
+    needsRecenter = true;
+    banner('', 0);
+  }
+  function makeCall(s, by) {
+    if (!rep || rep.phase === 'ended') return;
+    if (rep.call === s) return;
+    rep.call = s; rep.callT = rep.t; rep.callBy = by;
+    banner(s === 'L' ? '味方→左！' : '味方→右！', 1.0);
+  }
+  let bannerT = 0;
+  function banner(text, sec) { $('banner').textContent = text; $('banner').hidden = !text; bannerT = sec; }
+
+  // distance from point p to segment a→b, and position t along it
+  function segInfo(p, a, b) {
+    const abx = b.x - a.x, abz = b.z - a.z, L2 = abx * abx + abz * abz;
+    const t = ((p.x - a.x) * abx + (p.z - a.z) * abz) / L2;
+    const cx = a.x + abx * t, cz = a.z + abz * t;
+    return { t, d: Math.hypot(p.x - cx, p.z - cz) };
+  }
+  function laneBlockedByMe(s) { const i = segInfo(me.pos, holder.pos, recv[s].pos); return i.t > 0.02 && i.t < 0.5 && i.d < 0.95; }
+  function markedByMate(s) { return mate.pos.distanceTo(recv[s].pos) < 2.2; }
+  function laneOpen(s) { return !laneBlockedByMe(s) && !markedByMate(s); }
+  const distToHolder = () => Math.hypot(me.pos.x - holder.pos.x, me.pos.z - holder.pos.z);
+  const mySpeed = () => Math.hypot(me.vel.x, me.vel.z);
+
+  function updateDrill(dt) {
+    rep.t += dt;
+    // what is in your central view (±30°) counts as "checked"
+    const gy = cameraYaw();
+    const inView = p => Math.abs(wrap(yawTo(p) - gy)) < 30 * deg;
+    if (!rep.decision) {
+      if (inView(recv.L.pos)) rep.seen.L = true;
+      if (inView(recv.R.pos)) rep.seen.R = true;
+      if (inView(mate.pos)) rep.seen.M = true;
+    }
+
+    // receivers: the dangerous one drifts forward into space
+    if (!rep.decision) recv[rep.side].pos.z = Math.min(4, recv[rep.side].pos.z + dt * 0.6);
+    for (const s of ['L', 'R']) { recv[s].facing = Math.atan2(holder.pos.x - recv[s].pos.x, holder.pos.z - recv[s].pos.z); recv[s].headYaw = 0; }
+
+    // teammate: holds a covering spot until told, then goes to that receiver (goal side)
+    if (rep.call) mate.target = new THREE.Vector3(recv[rep.call].pos.x * 0.92, 0, recv[rep.call].pos.z + 1.2);
+    const mt = mate.target || new THREE.Vector3(me.pos.x * 0.4 + (rep.side === 'L' ? 3 : -3), 0, Math.min(me.pos.z + 2, 6));
+    const mv = mt.clone().sub(mate.pos); const md = mv.length();
+    if (md > 0.05) mate.pos.add(mv.multiplyScalar(Math.min(1, (mate.target ? 6 : 3) * dt / md)));
+    mate.facing = Math.atan2(holder.pos.x - mate.pos.x, holder.pos.z - mate.pos.z); mate.headYaw = 0;
+
+    const atFeet = (dist) => ball.position.set(holder.pos.x + Math.sin(holder.facing) * dist, 0.11, holder.pos.z + Math.cos(holder.facing) * dist);
+    if (rep.phase === 'incoming') {
+      const k = Math.min(1, rep.t / BALL_TRAVEL);
+      ball.position.set(0, 0.11, -24 + (holder.pos.z - 0.45 + 24) * k);
+      holder.facing = Math.PI; holder.headYaw = 0.9 * Math.sin(rep.t * 3); // scanning before receiving
+      if (k >= 1) { rep.phase = 'live'; rep.seenBeforeBall = rep.seen.L + rep.seen.R + rep.seen.M; }
+    } else if (rep.phase === 'live') {
+      rep.live += dt;
+      holder.facing = wrap(holder.facing + wrap(0 - holder.facing) * Math.min(1, dt * 4));
+      holder.headYaw = 0.8 * Math.sin(rep.live * 3.2);
+      const d = distToHolder();
+      holder.pos.z += (d < 3 ? 0.2 : 0.8) * dt;
+      atFeet(0.45);
+      if (d < 2.0) rep.nearSpeed = Math.max(rep.nearSpeed, mySpeed());
+      if (rep.live >= rep.decideAt || d < 1.3) decide();
+    } else {
+      rep.passT += dt;
+      if (rep.phase === 'windup') {
+        // kicking leg swings back: this is the cue you will later learn to read
+        holder.legs[1].rotation.x = -0.9 * Math.min(1, rep.passT / 0.35);
+        holder.facing = Math.atan2(recv[rep.passTo].pos.x - holder.pos.x, recv[rep.passTo].pos.z - holder.pos.z);
+        holder.headYaw = 0;
+        atFeet(0.45);
+        if (rep.passT >= 0.35) { rep.phase = 'pass'; rep.passT = 0; rep.passFrom = ball.position.clone(); holder.legs[1].rotation.x = 0.6; }
+      } else if (rep.phase === 'pass') {
+        const target = recv[rep.passTo].pos, from = rep.passFrom;
+        const L = Math.hypot(target.x - from.x, target.z - from.z), k = Math.min(1, rep.passT * 13 / L);
+        ball.position.set(from.x + (target.x - from.x) * k, 0.11, from.z + (target.z - from.z) * k);
+        if (Math.hypot(ball.position.x - me.pos.x, ball.position.z - me.pos.z) < 0.8) finish('intercept');
+        else if (Math.hypot(ball.position.x - mate.pos.x, ball.position.z - mate.pos.z) < 0.9) finish('mateCut');
+        else if (k >= 1) finish('passed');
+      } else if (rep.phase === 'beaten') {
+        const dir = Math.sign(holder.pos.x - me.pos.x) || 1;
+        holder.pos.z += 4.5 * dt; holder.pos.x += dir * 2.5 * dt; holder.facing = 0.4 * dir;
+        atFeet(0.6);
+        if (rep.passT > 1.2) finish('beaten');
+      } else if (rep.phase === 'stuck') {
+        holder.pos.z -= 0.8 * dt; holder.facing = Math.PI; holder.headYaw = 0.9 * Math.sin(rep.passT * 6);
+        atFeet(0.45);
+        if (rep.passT > 1.2) finish('stuck');
+      }
+    }
+    if (rep.phase !== 'windup') holder.legs[1].rotation.x *= 0.9;
+    // record for the replay
+    rep.recT += dt;
+    if (rep.recT >= 0.1 && rep.phase !== 'ended') { rep.recT = 0; rep.rec.push(snapshot()); }
+  }
+  function decide() {
+    const other = rep.side === 'L' ? 'R' : 'L';
+    rep.distAtDecision = distToHolder();
+    rep.decision = { blockedMe: { L: laneBlockedByMe('L'), R: laneBlockedByMe('R') }, marked: { L: markedByMate('L'), R: markedByMate('R') } };
+    rep.passT = 0;
+    if (rep.distAtDecision < 2.0 && rep.nearSpeed > 3.8) { rep.phase = 'beaten'; banner('かわされた！', 1.2); return; }
+    const open = [rep.side, other].filter(laneOpen);
+    if (open.length) { rep.passTo = open[0]; rep.phase = 'windup'; }
+    else { rep.phase = 'stuck'; banner('出しどころなし！', 1.2); }
+  }
+  function finish(outcome) {
+    rep.rec.push(snapshot());
+    rep.outcome = outcome; rep.phase = 'ended';
+    const win = outcome === 'intercept' || outcome === 'mateCut' || outcome === 'stuck';
+    tally.n++; if (win) tally.ok++;
+    $('tally').textContent = `${tally.n}本中 ${tally.ok}本成功`;
+    banner(win ? 'ナイス！' : '通された…', 1.0);
+    setTimeout(showResult, 900);
+  }
+
+  // ---------- scoring ----------
+  const sideJ = { L: '左', R: '右' };
+  function grade() {
+    const r = rep, other = r.side === 'L' ? 'R' : 'L';
+    const items = [];
+    // 1. course cut
+    const cutMine = r.decision && r.decision.blockedMe[r.side];
+    const cutMate = r.decision && r.decision.marked[r.side];
+    if (r.outcome === 'beaten') items.push(['b', 'コースを切る', '飛び込んでかわされた。2mまで来たらスピードを落として、半身で止まろう']);
+    else if (cutMine) items.push(['g', 'コースを切る', `${sideJ[r.side]}の危ない受け手へのコースを体で消せた`]);
+    else if (cutMate) items.push(['m', 'コースを切る', `${sideJ[r.side]}は味方が消してくれた。自分の体でも切れるとベスト`]);
+    else items.push(['b', 'コースを切る', `${sideJ[r.side]}の受け手へのコースが空いていた。ボールと${sideJ[r.side]}の受け手を結ぶ線の上に体を入れながら寄せよう`]);
+    // 2. scanning
+    const n = r.seen.L + r.seen.R + r.seen.M;
+    const missing = [!r.seen.L && '左の受け手', !r.seen.R && '右の受け手', !r.seen.M && '後ろの味方'].filter(Boolean);
+    items.push([n === 3 ? 'g' : n === 2 ? 'm' : 'b', '首振り',
+      n === 3 ? (r.seenBeforeBall === 3 ? 'ボールが来る前に3人とも見られた' : '3人とも見られた。ボールが来る前に終われるともっと良い')
+              : `見ていない：${missing.join('、')}。寄せる前に首を振って確認しよう`]);
+    // 3. voice call
+    if (!r.call) items.push(['b', '声の指示', `味方に指示がなかった。「${sideJ[other]}いけ！」で反対側をまかせよう`]);
+    else if (r.call === r.side) items.push(['b', '声の指示', `「${sideJ[r.side]}」と言ったけど、そっちは自分が切る側。味方には反対の「${sideJ[other]}いけ！」`]);
+    else if (r.callT > BALL_TRAVEL + 0.8) items.push(['m', '声の指示', `「${sideJ[other]}いけ」は正しいけど遅い。ボールが来る前に言おう`]);
+    else items.push(['g', '声の指示', `「${sideJ[other]}いけ」をいいタイミングで出せた（${r.callBy}）`]);
+    // 4. approach
+    const d = r.distAtDecision;
+    if (r.outcome === 'beaten') items.push(['b', '寄せ', `近くで秒速${r.nearSpeed.toFixed(1)}m。止まれずに飛び込んだ`]);
+    else if (d > 4.5) items.push(['b', '寄せ', `相手が判断した時、まだ${d.toFixed(1)}m離れていた。もっと早く寄せよう`]);
+    else if (d > 2.8) items.push(['m', '寄せ', `相手が判断した時${d.toFixed(1)}m。あと一歩寄せたい`]);
+    else items.push(['g', '寄せ', `相手が判断した時${d.toFixed(1)}m。いい距離まで寄せられた`]);
+    return items;
+  }
+  const OUT = {
+    intercept: ['インターセプト！', 'パスを自分でカットした。'],
+    mateCut: ['味方がカット！', '指示どおり味方がパスを奪った。'],
+    stuck: ['出しどころを消した！', '両方のコースが消えて、相手は下げるしかなかった。'],
+    passed: ['パスを通された', ''],
+    beaten: ['かわされた', '勢いよく飛び込みすぎて、逆を取られた。'],
+  };
+  function showResult() {
+    const [title, why0] = OUT[rep.outcome];
+    let why = why0;
+    if (rep.outcome === 'passed') why = `${sideJ[rep.passTo]}の受け手へのコースが空いていた。` + (rep.passTo === rep.side ? '危ない側を体で切れていなかった。' : '反対側を味方にまかせられていなかった。');
+    $('resTitle').textContent = title; $('resWhy').textContent = why;
+    $('items').innerHTML = '';
+    for (const [m, name, text] of grade()) {
+      const el = document.createElement('div'); el.className = 'item';
+      const mk = document.createElement('div'); mk.className = 'mark ' + m; mk.textContent = m === 'g' ? '○' : m === 'm' ? '△' : '×';
+      const tx = document.createElement('div'); const b = document.createElement('b'); b.textContent = name;
+      const sm = document.createElement('small'); sm.textContent = text; tx.append(b, sm); el.append(mk, tx);
+      $('items').append(el);
+    }
+    $('result').hidden = false;
+    startReplay();
+  }
+  $('next').addEventListener('click', () => { $('result').hidden = true; stopReplay(); newRep(); });
+  $('toMenu').addEventListener('click', () => { $('result').hidden = true; stopReplay(); $('start').hidden = false; });
+
+  // ---------- replay (top view) ----------
+  const rc = $('replay'), rg = rc.getContext('2d');
+  let replayRAF = 0;
+  function startReplay() {
+    const frames = rep.rec; let i = 0, acc = 0, last = performance.now();
+    const loop = now => {
+      acc += now - last; last = now;
+      while (acc > 100) { acc -= 100; i++; if (i >= frames.length + 12) i = 0; }
+      const k = Math.min(i, frames.length - 1);
+      drawTop(rg, rc.width, rc.height, frames[k], { x0: -14, x1: 14, z0: -10, z1: 14 }, frames.slice(0, k + 1));
+      replayRAF = requestAnimationFrame(loop);
+    };
+    replayRAF = requestAnimationFrame(loop);
+  }
+  function stopReplay() { cancelAnimationFrame(replayRAF); }
+
+  // shared top-down renderer (minimap + replay)
+  function drawTop(g, W, H, f, win, trail) {
+    const s = Math.min(W / (win.x1 - win.x0), H / (win.z1 - win.z0));
+    const ox = (W - (win.x1 - win.x0) * s) / 2, oz = (H - (win.z1 - win.z0) * s) / 2;
+    const X = x => ox + (x - win.x0) * s, Y = z => oz + (z - win.z0) * s;
+    g.clearRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(255,255,255,.3)'; g.lineWidth = 2;
+    g.strokeRect(X(-20.15), Y(26 - 16.5), 40.3 * s, 16.5 * s);
+    if (!f) return;
+    for (const k of ['L', 'R']) { // passing lanes from the ball holder
+      g.strokeStyle = 'rgba(255,143,143,.35)'; g.setLineDash([6, 6]); g.beginPath();
+      g.moveTo(X(f.h[0]), Y(f.h[1])); g.lineTo(X(f[k][0]), Y(f[k][1])); g.stroke(); g.setLineDash([]);
+    }
+    const half = 30 * deg; // your central view
+    const fwd = a => [X(f.me[0] - Math.sin(a) * 9), Y(f.me[1] - Math.cos(a) * 9)];
+    g.fillStyle = 'rgba(255,210,63,.28)'; g.beginPath(); g.moveTo(X(f.me[0]), Y(f.me[1]));
+    const [ax, ay] = fwd(f.yaw - half), [bx, by] = fwd(f.yaw + half);
+    g.lineTo(ax, ay); g.lineTo(bx, by); g.closePath(); g.fill();
+    g.strokeStyle = 'rgba(255,143,143,.95)'; g.lineWidth = 2; g.beginPath(); // holder's gaze
+    g.moveTo(X(f.h[0]), Y(f.h[1])); g.lineTo(X(f.h[0] + Math.sin(f.hy) * 4), Y(f.h[1] + Math.cos(f.hy) * 4)); g.stroke();
+    if (trail && trail.length > 1) {
+      g.strokeStyle = 'rgba(255,210,63,.7)'; g.lineWidth = 2; g.beginPath();
+      trail.forEach((t, i) => i ? g.lineTo(X(t.me[0]), Y(t.me[1])) : g.moveTo(X(t.me[0]), Y(t.me[1]))); g.stroke();
+    }
+    const dot = (p, c, r) => { g.fillStyle = c; g.beginPath(); g.arc(X(p[0]), Y(p[1]), r, 0, Math.PI * 2); g.fill(); };
+    const r = Math.max(5, s * 0.45);
+    dot(f.h, '#e2474b', r); dot(f.L, '#e2474b', r); dot(f.R, '#e2474b', r);
+    dot(f.m, '#3d8bff', r); dot(f.b, '#ffffff', r * 0.55); dot(f.me, '#ffd23f', r * 1.1);
+  }
+  const mm = $('minimap'), mg = mm.getContext('2d');
+  function snapshot() {
+    return { me: [me.pos.x, me.pos.z], yaw: cameraYaw(), h: [holder.pos.x, holder.pos.z], hy: holder.facing + holder.headYaw,
+      L: [recv.L.pos.x, recv.L.pos.z], R: [recv.R.pos.x, recv.R.pos.z], m: [mate.pos.x, mate.pos.z], b: [ball.position.x, ball.position.z] };
+  }
+
+  // ---------- start ----------
+  const note = $('note');
+  function begin(m) {
+    mode = m; $('start').hidden = true;
+    $('hint').textContent = m === 'gyro'
+      ? '体ごと回って見回す ・ 左でスティック移動 ・ 右ドラッグで向きの微調整'
+      : '左でスティック移動 ・ 右をドラッグで見回す';
+    try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (_) {}
+    if (!rec) startVoice();
+    newRep();
+  }
+  $('startTouch').addEventListener('click', () => begin('touch'));
+  $('startGyro').addEventListener('click', async () => {
+    note.textContent = '';
+    try {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        const r = await DeviceOrientationEvent.requestPermission();
+        if (r !== 'granted') throw new Error('denied');
+      }
+      addEventListener('deviceorientation', onOri);
+      const ok = await new Promise(res => { const t0 = performance.now(); (function chk() { if (devOri) return res(true); if (performance.now() - t0 > 1200) return res(false); requestAnimationFrame(chk); })(); });
+      if (!ok) throw new Error('no data');
+      begin('gyro');
+    } catch (err) {
+      note.textContent = 'この画面ではジャイロが使えませんでした。今は「タッチ操作で始める」で試してください。';
+    }
+  });
+
+  // ---------- movement ----------
+  function updateMe(dt) {
+    let ix = joy.x, iy = joy.y;
+    if (keys.KeyA) ix -= 1; if (keys.KeyD) ix += 1; if (keys.KeyW) iy -= 1; if (keys.KeyS) iy += 1;
+    const L = Math.hypot(ix, iy); if (L > 1) { ix /= L; iy /= L; }
+    const yaw = cameraYaw();
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+    const sp = rep.phase === 'ended' ? 0 : MAX_SPEED;
+    const tx = (fx * -iy + rx * ix) * sp, tz = (fz * -iy + rz * ix) * sp;
+    const a = Math.min(1, dt * 3.5); // acceleration: you can't stop instantly
+    me.vel.x += (tx - me.vel.x) * a; me.vel.z += (tz - me.vel.z) * a;
+    me.pos.x += me.vel.x * dt; me.pos.z += me.vel.z * dt;
+    me.pos.x = Math.max(-FW / 2 + 0.5, Math.min(FW / 2 - 0.5, me.pos.x));
+    me.pos.z = Math.max(-FL / 2 + 0.5, Math.min(FL / 2 - 0.5, me.pos.z));
+    others.forEach(p => {
+      const dx = me.pos.x - p.pos.x, dz = me.pos.z - p.pos.z, d = Math.hypot(dx, dz);
+      if (d < 0.6 && d > 0.0001) { me.pos.x = p.pos.x + dx / d * 0.6; me.pos.z = p.pos.z + dz / d * 0.6; }
+    });
+    camera.position.set(me.pos.x, EYE, me.pos.z);
+  }
+
+  // ---------- loop ----------
+  function resize() {
+    renderer.setSize(innerWidth, innerHeight, false);
+    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  }
+  addEventListener('resize', resize); resize();
+  newRep(); rep.phase = 'ended'; // idle scene behind the start card
+  ball.position.set(0, 0.11, -5.55);
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    if (rep.phase !== 'ended') updateDrill(dt);
+    others.forEach(p => { p.g.position.copy(p.pos); p.g.rotation.y = p.facing; p.head.rotation.y = p.headYaw; });
+    applyLook();
+    updateMe(dt);
+    drawTop(mg, mm.width, mm.height, snapshot(), { x0: -16, x1: 16, z0: -12, z1: 16 });
+    if (bannerT > 0) { bannerT -= dt; if (bannerT <= 0) $('banner').hidden = true; }
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // hook for automated checks
+  window.__drill = { me, rep: () => rep, makeCall, setYaw: y => { yawOffset = y; }, keys };
+})();
+</script>
