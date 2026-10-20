@@ -132,6 +132,9 @@ body {
   #replay { max-height: 50vh; object-fit: contain; }
 }
 @media (max-width: 500px) and (orientation: portrait) { .res-grid { grid-template-columns: minmax(0, 1fr); } }
+/* VR goggles: the canvas is split into two eyes, so the flat HUD and menus are drawn inside the 3D scene instead */
+body.vr .hud-top, body.vr .hint, body.vr #calls, body.vr #banner, body.vr .overlay,
+body.vr #joyBase, body.vr #joyKnob { display: none !important; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -145,6 +148,7 @@ body {
   </div>
   <div class="stack" style="justify-items:end">
     <button class="btn" id="recenter" type="button">正面に戻す</button>
+    <button class="btn" id="vrToggle" type="button">ゴーグルモード</button>
     <div class="tag tally" id="tally">0本中 0本成功</div>
   </div>
 </div>
@@ -177,6 +181,14 @@ body {
       <button class="btn primary" id="startGyro" type="button">ジャイロで始める</button>
       <button class="btn" id="startTouch" type="button">タッチ操作で始める</button>
     </div>
+    <div class="row">
+      <button class="btn" id="startVR" type="button">VRゴーグルで始める</button>
+    </div>
+    <div class="levels">ゴーグルで進む方法
+      <button class="btn sel" type="button" data-walk="hold">ボタン長押し</button>
+      <button class="btn" type="button" data-walk="step">足ぶみ（ためし）</button>
+    </div>
+    <p>VRゴーグル：横向きにしてから押し、モーションとマイクを許可してゴーグルにはめる。メニューは声で <span class="say">「スタート」</span> <span class="say">「つぎ」</span> <span class="say">「メニュー」</span> <span class="say">「レベル2」</span>、ゴーグルのボタンでも決定できます。</p>
     <div id="note"></div>
   </div>
 </div>
@@ -349,6 +361,7 @@ body {
   }
   canvas.addEventListener('pointerdown', e => {
     canvas.setPointerCapture(e.pointerId);
+    if (vr) { vrDown(e); return; }
     if (e.clientX < innerWidth * 0.45 && joy.id === null) {
       joy.id = e.pointerId; joy.ox = e.clientX; joy.oy = e.clientY;
       joyBase.style.left = e.clientX + 'px'; joyBase.style.top = e.clientY + 'px';
@@ -367,8 +380,8 @@ body {
     if (e.pointerId === joy.id) { joy.id = null; joy.x = joy.y = 0; joyBase.hidden = joyKnob.hidden = true; }
     if (e.pointerId === drag.id) drag.id = null;
   };
-  canvas.addEventListener('pointerup', release);
-  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('pointerup', e => { release(e); if (vr) vrUp(e, true); });
+  canvas.addEventListener('pointercancel', e => { release(e); if (vr) vrUp(e, false); });
   const keys = {};
   addEventListener('keydown', e => {
     keys[e.code] = true;
@@ -383,9 +396,46 @@ body {
   let rec = null, voiceOn = false;
   function setMic(text, on) { $('micText').textContent = text; $('mic').classList.toggle('on', !!on); }
   function showButtons() { $('calls').hidden = false; }
+  // Words the game listens for. Edit these lists to change what you say.
+  const VOICE = {
+    left:     ['左', 'ひだり', 'レフト'],
+    right:    ['右', 'みぎ', 'ライト'],
+    start:    ['スタート', 'すたーと', 'はじめ', '始め', '開始'],
+    next:     ['次', 'つぎ', 'ネクスト', 'もう一回', 'もう1回', 'もういっかい', 'もう一本', 'もう1本'],
+    menu:     ['メニュー', 'めにゅー', 'レベル変更', '戻る', 'もどる'],
+    level:    ['レベル', 'れべる'],           // followed by 1/2/3 (いち・に・さん / ワン・ツー・スリー also work)
+    recenter: ['正面', 'しょうめん'],
+    vrOff:    ['ゴーグル終了', 'ゴーグルおわり', 'VR終了', 'ブイアール終了'],
+  };
+  const has = (txt, k) => VOICE[k].some(w => txt.includes(w));
   function parseSide(txt) {
-    const l = /左|ひだり|レフト/.test(txt), r = /右|みぎ|ライト/.test(txt);
+    const l = has(txt, 'left'), r = has(txt, 'right');
     if (l && !r) return 'L'; if (r && !l) return 'R'; return null;
+  }
+  function parseLevel(txt) {
+    const w = VOICE.level.find(w => txt.includes(w)); if (!w) return null;
+    const t = txt.slice(txt.indexOf(w) + w.length).trim();
+    if (/^(1|１|一|いち|ワン)/.test(t)) return 1;
+    if (/^(2|２|二|に|ツー)/.test(t)) return 2;
+    if (/^(3|３|三|さん|スリー)/.test(t)) return 3;
+    return null;
+  }
+  // which screen is up decides which words count, so a stray word mid-drill can't open a menu
+  const screenState = () => !$('start').hidden ? 'menu' : !$('result').hidden ? 'result' : 'play';
+  let acted = new Set();
+  function onVoice(txt, idx) {
+    const st = screenState(), once = a => { const k = idx + ':' + a; if (acted.has(k)) return false; acted.add(k); return true; };
+    if (has(txt, 'vrOff')) { if (vr && once('vrOff')) exitVR(); return; }
+    if (has(txt, 'recenter') && once('recenter')) needsRecenter = true;
+    if (st === 'menu') {
+      const lv = parseLevel(txt); if (lv && once('lv' + lv)) setLevel(lv);
+      if (has(txt, 'start') && once('start')) primary();
+    } else if (st === 'result') {
+      if (has(txt, 'menu') && once('menu')) toMenu();
+      else if (has(txt, 'next') && once('next')) primary();
+    } else {
+      const s = parseSide(txt); if (s) makeCall(s, '声');
+    }
   }
   let heardTimer = 0;
   function showHeard(txt) {
@@ -396,12 +446,12 @@ body {
     if (!SR) { setMic('この画面では使えません。下のボタンで指示してね', false); showButtons(); return; }
     try {
       rec = new SR(); rec.lang = 'ja-JP'; rec.continuous = true; rec.interimResults = true;
-      rec.onstart = () => { voiceOn = true; setMic('聞き取り中', true); };
+      rec.onstart = () => { voiceOn = true; acted = new Set(); setMic('聞き取り中', true); };
       rec.onresult = e => {
         for (let i = e.resultIndex; i < e.results.length; i++) {
           const txt = e.results[i][0].transcript.trim(); if (!txt) continue;
           showHeard(txt);
-          const s = parseSide(txt); if (s) makeCall(s, '声');
+          onVoice(txt, i);
         }
       };
       rec.onerror = e => {
@@ -423,11 +473,12 @@ body {
     3: { decide: 1.8, hint: false, note: '印なし・相手の判断が速い' },
   };
   let level = 1;
-  document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => {
-    level = +b.dataset.level;
-    document.querySelectorAll('[data-level]').forEach(x => x.classList.toggle('sel', x === b));
+  function setLevel(n) {
+    level = n;
+    document.querySelectorAll('[data-level]').forEach(x => x.classList.toggle('sel', +x.dataset.level === n));
     $('levelNote').textContent = LEVELS[level].note;
-  }));
+  }
+  document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => setLevel(+b.dataset.level)));
   const tally = { n: 0, ok: 0 };
   let rep = null;
   const BALL_TRAVEL = 1.3; // s, ball travelling to the holder before he can decide
@@ -617,11 +668,19 @@ body {
       const sm = document.createElement('small'); sm.textContent = text; tx.append(b, sm); el.append(mk, tx);
       $('items').append(el);
     }
-    $('result').hidden = false;
+    $('result').hidden = false; resultAt = performance.now();
     startReplay();
   }
-  $('next').addEventListener('click', () => { $('result').hidden = true; stopReplay(); newRep(); });
-  $('toMenu').addEventListener('click', () => { $('result').hidden = true; stopReplay(); $('start').hidden = false; });
+  function nextRep() { $('result').hidden = true; stopReplay(); newRep(); }
+  function toMenu() { $('result').hidden = true; stopReplay(); $('start').hidden = false; }
+  $('next').addEventListener('click', nextRep);
+  $('toMenu').addEventListener('click', toMenu);
+  // the one "OK" action: voice 「スタート」/「つぎ」, the goggles' button, or a controller's A button
+  function primary() {
+    const st = screenState();
+    if (st === 'menu') begin(mode === 'touch' && !vr ? 'touch' : 'gyro');
+    else if (st === 'result') nextRep();
+  }
 
   // ---------- replay (top view) ----------
   const rc = $('replay'), rg = rc.getContext('2d');
@@ -685,28 +744,56 @@ body {
     newRep();
   }
   $('startTouch').addEventListener('click', () => begin('touch'));
+  // asks for motion access (must run inside a tap); motion = step-in-place detection for the goggles
+  async function enableGyro() {
+    if (devOri) return true;
+    try {
+      const perms = [];
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') perms.push(DeviceOrientationEvent.requestPermission());
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') perms.push(DeviceMotionEvent.requestPermission().catch(() => 'denied'));
+      const r = await Promise.all(perms);
+      if (r.length && r[0] !== 'granted') return false;
+      addEventListener('deviceorientation', onOri);
+      addEventListener('devicemotion', onMotion);
+      return await new Promise(res => { const t0 = performance.now(); (function chk() { if (devOri) return res(true); if (performance.now() - t0 > 1200) return res(false); requestAnimationFrame(chk); })(); });
+    } catch (_) { return false; }
+  }
+  const NO_GYRO = 'この画面ではジャイロが使えませんでした。今は「タッチ操作で始める」で試してください。';
   $('startGyro').addEventListener('click', async () => {
     note.textContent = '';
-    try {
-      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-        const r = await DeviceOrientationEvent.requestPermission();
-        if (r !== 'granted') throw new Error('denied');
-      }
-      addEventListener('deviceorientation', onOri);
-      const ok = await new Promise(res => { const t0 = performance.now(); (function chk() { if (devOri) return res(true); if (performance.now() - t0 > 1200) return res(false); requestAnimationFrame(chk); })(); });
-      if (!ok) throw new Error('no data');
-      begin('gyro');
-    } catch (err) {
-      note.textContent = 'この画面ではジャイロが使えませんでした。今は「タッチ操作で始める」で試してください。';
-    }
+    if (await enableGyro()) begin('gyro'); else note.textContent = NO_GYRO;
   });
+  $('startVR').addEventListener('click', async () => {
+    note.textContent = '';
+    if (!(await enableGyro())) { note.textContent = NO_GYRO; return; }
+    mode = 'gyro'; enterVR();
+    if (!rec) startVoice(); // the menu stays up: say 「スタート」 or press the goggles' button once they're on
+  });
+  $('vrToggle').addEventListener('click', async () => {
+    if (!(await enableGyro())) { banner('ジャイロが使えません', 1.5); return; }
+    mode = 'gyro'; enterVR();
+  });
+  document.querySelectorAll('[data-walk]').forEach(b => b.addEventListener('click', () => {
+    walkMode = b.dataset.walk;
+    document.querySelectorAll('[data-walk]').forEach(x => x.classList.toggle('sel', x === b));
+  }));
 
   // ---------- movement ----------
   function updateMe(dt) {
     let ix = joy.x, iy = joy.y;
     if (keys.KeyA) ix -= 1; if (keys.KeyD) ix += 1; if (keys.KeyW) iy -= 1; if (keys.KeyS) iy += 1;
+    const pad = readPad(dt);
+    if (pad) { ix += pad.x; iy += pad.y; }
+    let yaw = cameraYaw();
+    // goggles: walk forward while the button is held / while stepping in place
+    const w = vr && !ix && !iy ? vrWalkAmount() : 0;
+    if (w > 0) {
+      // the walking direction follows your gaze slowly, so a quick head check doesn't steer you
+      walkYaw = walking ? walkYaw + wrap(yaw - walkYaw) * Math.min(1, dt / 0.8) : yaw;
+      yaw = walkYaw; iy = -w;
+    }
+    walking = w > 0;
     const L = Math.hypot(ix, iy); if (L > 1) { ix /= L; iy /= L; }
-    const yaw = cameraYaw();
     const fx = -Math.sin(yaw), fz = -Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
     const sp = rep.phase === 'ended' ? 0 : MAX_SPEED;
     const tx = (fx * -iy + rx * ix) * sp, tz = (fz * -iy + rz * ix) * sp;
@@ -722,10 +809,149 @@ body {
     camera.position.set(me.pos.x, EYE, me.pos.z);
   }
 
+  // ---------- VR goggles (phone in a Cardboard-style viewer) ----------
+  // iOS Safari has no WebXR, so we draw the two eyes side by side ourselves and look around with the gyro.
+  let vr = false, walkMode = 'hold', walking = false, walkYaw = 0;
+  const stereo = new THREE.StereoCamera(); stereo.eyeSep = 0.06;
+  scene.add(camera); // so the head-locked panel (a child of the camera) is rendered
+  function enterVR() {
+    vr = true; document.body.classList.add('vr'); resize(); needsRecenter = true; hudKey = '';
+    const el = document.documentElement, fs = el.requestFullscreen || el.webkitRequestFullscreen;
+    try { const p = fs && fs.call(el); p && p.catch && p.catch(() => {}); } catch (_) {}
+    try { screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape').catch(() => {}); } catch (_) {}
+    try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (_) {}
+  }
+  function exitVR() {
+    vr = false; document.body.classList.remove('vr'); hud.visible = false; resize(); needsRecenter = true;
+    try { const ex = document.exitFullscreen || document.webkitExitFullscreen; (document.fullscreenElement || document.webkitFullscreenElement) && ex.call(document); } catch (_) {}
+  }
+
+  // the goggles' button taps the screen: a short tap = OK, holding it = walk (in ボタン長押し mode).
+  // Two fingers at once leaves goggle mode.
+  const vrTouch = { ids: new Set(), downAt: 0, multi: false };
+  function vrDown(e) {
+    vrTouch.ids.add(e.pointerId);
+    if (vrTouch.ids.size === 1) { vrTouch.downAt = performance.now(); vrTouch.multi = false; } else vrTouch.multi = true;
+  }
+  function vrUp(e, ok) {
+    vrTouch.ids.delete(e.pointerId);
+    if (vrTouch.ids.size || !ok) return;
+    if (vrTouch.multi) exitVR();
+    else if (performance.now() - vrTouch.downAt < 400) primary();
+  }
+
+  // step in place: the phone bobs up and down with each step; the bounce energy sets the speed
+  let stepE = 0;
+  function onMotion(e) {
+    const a = e.acceleration; if (!a || a.x === null) return;
+    const m = Math.hypot(a.x, a.y, a.z);
+    stepE += (m - stepE) * 0.08;
+  }
+  function vrWalkAmount() {
+    if (screenState() !== 'play') return 0;
+    if (walkMode === 'hold') return vrTouch.ids.size ? 1 : 0;
+    const STEP_ON = 1.6; // m/s² of bounce before it counts as stepping (raise it if head turns make you walk)
+    return stepE < STEP_ON ? 0 : Math.min(1, 0.4 + (stepE - STEP_ON) / 3);
+  }
+
+  // Bluetooth controller (Gamepad API): left stick = move, right stick = turn, A = OK, LB/RB = 「左いけ」「右いけ」
+  const padPrev = {};
+  function readPad(dt) {
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const p of pads) {
+      if (!p) continue;
+      const dz = v => Math.abs(v || 0) < 0.15 ? 0 : v;
+      const edge = (i, fn) => { const b = !!(p.buttons[i] && p.buttons[i].pressed); if (b && !padPrev[i]) fn(); padPrev[i] = b; };
+      edge(0, primary); edge(4, () => makeCall('L', 'コントローラー')); edge(5, () => makeCall('R', 'コントローラー'));
+      yawOffset -= dz(p.axes[2]) * 2.2 * dt;
+      return { x: dz(p.axes[0]), y: dz(p.axes[1]) };
+    }
+    return null;
+  }
+
+  // head-locked panel: menus, results and call-outs drawn on a canvas floating 1.7 m in front of the eyes
+  const hudC = document.createElement('canvas'); hudC.width = 1024; hudC.height = 640;
+  const hg = hudC.getContext('2d'), hudTex = new THREE.CanvasTexture(hudC);
+  const hud = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 1.1875),
+    new THREE.MeshBasicMaterial({ map: hudTex, transparent: true, depthTest: false, depthWrite: false, fog: false }));
+  hud.position.set(0, -0.05, -1.7); hud.renderOrder = 999; hud.visible = false; camera.add(hud);
+  let hudKey = '', resultAt = 0;
+  const FONT = '"M PLUS Rounded 1c", "Hiragino Maru Gothic ProN", "Hiragino Sans", sans-serif';
+  function txt(t, x, y, size, color, align) {
+    hg.font = `800 ${size}px ${FONT}`; hg.fillStyle = color; hg.textAlign = align || 'left'; hg.fillText(t, x, y);
+  }
+  function wrapTxt(t, x, y, maxW, size, color, maxLines) {
+    hg.font = `500 ${size}px ${FONT}`; hg.fillStyle = color; hg.textAlign = 'left';
+    let line = '', n = 0;
+    for (const ch of t) {
+      if (line && hg.measureText(line + ch).width > maxW) { hg.fillText(line, x, y); y += size * 1.3; line = ch; if (++n >= maxLines) return y; }
+      else line += ch;
+    }
+    if (line) { hg.fillText(line, x, y); y += size * 1.3; }
+    return y;
+  }
+  function panelBg(x, y, w, h) {
+    hg.fillStyle = 'rgba(8,22,15,.9)'; hg.strokeStyle = '#3c6b52'; hg.lineWidth = 4; hg.beginPath();
+    hg.roundRect ? hg.roundRect(x, y, w, h, 28) : hg.rect(x, y, w, h); hg.fill(); hg.stroke();
+  }
+  function drawHud(now) {
+    const st = screenState(), portrait = innerHeight > innerWidth;
+    const bannerOn = !$('banner').hidden, heardOn = !$('heard').hidden;
+    const key = [st, portrait, level, walkMode, $('micText').textContent, bannerOn && $('banner').textContent,
+      heardOn && $('heard').textContent, st === 'result' && Math.floor((now - resultAt) / 100)].join('|');
+    if (key === hudKey) return;
+    hudKey = key;
+    hg.clearRect(0, 0, 1024, 640); hg.textBaseline = 'middle';
+    const Y = '#ffd23f', W = '#f2f7ef', D = '#b9cdbf';
+    if (portrait) { panelBg(112, 220, 800, 200); txt('横向きにしてね', 512, 320, 64, Y, 'center'); }
+    else if (st === 'menu') {
+      panelBg(40, 30, 944, 580);
+      txt('死角トレーニング', 512, 100, 64, W, 'center');
+      txt(`レベル ${level}`, 90, 190, 46, Y); wrapTxt(LEVELS[level].note, 300, 190, 640, 32, D, 1);
+      const rows = [['「スタート」', 'はじめる（ボタンでもOK）'], ['「レベル1」〜「レベル3」', 'レベルをかえる'],
+        ['「正面」', '向きをもどす'], ['「ゴーグル終了」', 'ふつうの画面へ']];
+      rows.forEach(([say, what], i) => { txt(say, 90, 270 + i * 66, 38, Y); wrapTxt(what, 90 + Math.min(560, hg.measureText(say).width + 30), 270 + i * 66, 560, 32, W, 1); });
+      wrapTxt(`進む：${walkMode === 'hold' ? 'ボタン長押し' : '足ぶみ'}　声：${$('micText').textContent}`, 90, 560, 860, 28, D, 1);
+    } else if (st === 'result') {
+      panelBg(20, 20, 984, 600);
+      txt($('resTitle').textContent, 512, 70, 50, W, 'center');
+      const frames = rep.rec, k = Math.min(Math.floor((now - resultAt) / 100) % (frames.length + 12), frames.length - 1);
+      hg.save(); hg.translate(44, 110); hg.fillStyle = '#0b2216'; hg.fillRect(0, 0, 420, 400);
+      drawTop(hg, 420, 400, frames[k], { x0: -14, x1: 14, z0: -10, z1: 14 }, frames.slice(0, k + 1)); hg.restore();
+      const cols = { g: '#5ee08a', m: '#ffd23f', b: '#ff7a6e' };
+      let y = 130;
+      for (const [m, name, text] of grade()) {
+        txt(m === 'g' ? '○' : m === 'm' ? '△' : '×', 504, y + 4, 40, cols[m], 'center');
+        txt(name, 536, y, 32, W);
+        y = wrapTxt(text, 536, y + 40, 440, 24, D, 2) + 8;
+      }
+      txt('「つぎ」次の1本　「メニュー」レベルをかえる', 512, 575, 34, Y, 'center');
+    } else {
+      if (bannerOn) { hg.shadowColor = 'rgba(0,0,0,.7)'; hg.shadowBlur = 16; txt($('banner').textContent, 512, 170, 80, W, 'center'); hg.shadowBlur = 0; }
+      if (heardOn) {
+        hg.font = `800 34px ${FONT}`; const t = $('heard').textContent, w = hg.measureText(t).width + 48;
+        panelBg(512 - w / 2, 520, w, 70); txt(t, 512, 556, 34, W, 'center');
+      }
+    }
+    hudTex.needsUpdate = true;
+  }
+  function renderView(now) {
+    if (!vr) { renderer.setViewport(0, 0, innerWidth, innerHeight); renderer.render(scene, camera); return; }
+    hud.visible = true; drawHud(now);
+    scene.updateMatrixWorld(); stereo.update(camera);
+    const w = innerWidth / 2, h = innerHeight;
+    renderer.setScissorTest(true);
+    renderer.setScissor(0, 0, w, h); renderer.setViewport(0, 0, w, h); renderer.render(scene, stereo.cameraL);
+    renderer.setScissor(w, 0, w, h); renderer.setViewport(w, 0, w, h); renderer.render(scene, stereo.cameraR);
+    renderer.setScissorTest(false);
+  }
+
   // ---------- loop ----------
   function resize() {
     renderer.setSize(innerWidth, innerHeight, false);
-    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+    camera.aspect = (vr ? innerWidth / 2 : innerWidth) / innerHeight;
+    camera.fov = vr ? 80 : 70; // goggle lenses widen the view
+    camera.updateProjectionMatrix();
   }
   addEventListener('resize', resize); resize();
   newRep(); rep.phase = 'ended'; // idle scene behind the start card
@@ -738,12 +964,12 @@ body {
     applyLook();
     updateMe(dt);
     if (bannerT > 0) { bannerT -= dt; if (bannerT <= 0) $('banner').hidden = true; }
-    renderer.render(scene, camera);
+    renderView(now);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
 
   // hook for automated checks
-  window.__drill = { me, rep: () => rep, makeCall, setYaw: y => { yawOffset = y; }, keys };
+  window.__drill = { me, rep: () => rep, makeCall, setYaw: y => { yawOffset = y; }, keys, onVoice, enterVR, exitVR, primary, isVR: () => vr };
 })();
 </script>
