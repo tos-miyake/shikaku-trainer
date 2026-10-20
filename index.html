@@ -1,4 +1,17 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="死角トレ">
+<meta name="theme-color" content="#0e2a1c">
 <title>死角トレーニング</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;800&display=swap">
 <style>
@@ -49,11 +62,6 @@ body {
 .btn.primary { background: var(--accent); color: #1b1600; border-color: var(--accent); }
 .btn.sel { border-color: var(--accent); color: var(--accent); }
 
-#minimap {
-  position: fixed; right: calc(env(safe-area-inset-right, 0px) + 12px);
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
-  width: 170px; height: 150px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel);
-}
 #joyBase, #joyKnob { position: fixed; border-radius: 50%; pointer-events: none; transform: translate(-50%, -50%); }
 #joyBase { width: 120px; height: 120px; border: 2px solid rgba(242,247,239,.35); background: rgba(8,22,15,.35); }
 #joyKnob { width: 52px; height: 52px; background: rgba(255,210,63,.85); }
@@ -103,6 +111,27 @@ body {
 .mark.g { color: var(--good); } .mark.m { color: var(--mid); } .mark.b { color: var(--bad); }
 .item small { display: block; color: var(--ink-dim); font-size: 12.5px; }
 .tally { font-size: 13px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+/* phones (iPhone landscape is ~390-430px tall, portrait ~390px wide): shrink the HUD so it doesn't cover the pitch */
+@media (max-height: 500px), (max-width: 500px) {
+  .tag { font-size: 11px; padding: 4px 8px; max-width: 46ch; }
+  #heard { font-size: 13px; }
+  .btn { font-size: 12px; padding: 6px 10px; white-space: nowrap; }
+  .tally { white-space: nowrap; }
+  #calls { gap: 8px; }
+  #calls .btn { font-size: 15px; padding: 9px 14px; }
+  #banner { font-size: 24px; top: 26%; }
+  .hint { display: none; }
+  #joyBase { width: 96px; height: 96px; }
+  #joyKnob { width: 42px; height: 42px; }
+  .overlay { place-items: start center; }
+  .card { padding: 16px 14px; gap: 10px; }
+  .card h1 { font-size: 21px; } .card h2 { font-size: 18px; }
+  .card p, .card ul { font-size: 13px; line-height: 1.6; }
+  .row .btn { padding: 10px; font-size: 14px; }
+  .res-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  #replay { max-height: 50vh; object-fit: contain; }
+}
+@media (max-width: 500px) and (orientation: portrait) { .res-grid { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -120,7 +149,6 @@ body {
   </div>
 </div>
 <div id="banner" hidden></div>
-<canvas id="minimap" width="340" height="300"></canvas>
 <div class="hint" id="hint">左でスティック移動 ・ 右をドラッグで見回す</div>
 <div id="calls" hidden>
   <button class="btn" type="button" data-call="L">左いけ！</button>
@@ -266,10 +294,24 @@ body {
   const zee = new THREE.Vector3(0, 0, 1), yAxis = new THREE.Vector3(0, 1, 0);
   const euler = new THREE.Euler(), q0 = new THREE.Quaternion(), qYaw = new THREE.Quaternion();
   const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+  // Screen rotation in the same convention as deviceorientation (counter-clockwise, like window.orientation).
+  // iOS/iPadOS keeps window.orientation and it is the reliable value there; screen.orientation.angle on Safari
+  // can disagree with it (and is unsigned), which turned the view 90/180 degrees in landscape.
   function screenAngle() {
-    if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle * deg;
-    return (window.orientation || 0) * deg;
+    let a = null;
+    if (typeof window.orientation === 'number') a = window.orientation;
+    else if (screen.orientation && typeof screen.orientation.angle === 'number') a = screen.orientation.angle;
+    if (a === null) a = 0;
+    a = ((Math.round(a / 90) * 90) % 360 + 360) % 360;
+    // sanity check against the actual viewport shape (the angle sometimes lags or is wrong on iPad)
+    const land = innerWidth > innerHeight;
+    if (land && (a === 0 || a === 180)) {
+      const t = screen.orientation && screen.orientation.type;
+      a = t === 'landscape-secondary' ? 270 : 90;
+    } else if (!land && (a === 90 || a === 270)) a = 0;
+    return a * deg;
   }
+  let lastScreenAngle = null;
   function onOri(e) { if (e.alpha !== null) devOri = e; }
   // look yaw: 0 = looking toward -z (toward the attackers)
   function cameraYaw() {
@@ -279,10 +321,13 @@ body {
   function yawTo(p) { return Math.atan2(-(p.x - me.pos.x), -(p.z - me.pos.z)); }
   function applyLook() {
     if (mode === 'gyro' && devOri) {
+      const sa = screenAngle();
+      if (lastScreenAngle !== null && sa !== lastScreenAngle) needsRecenter = true; // rotated the device: face the ball again
+      lastScreenAngle = sa;
       euler.set(devOri.beta * deg, devOri.alpha * deg, -devOri.gamma * deg, 'YXZ');
       camera.quaternion.setFromEuler(euler);
       camera.quaternion.multiply(q1);
-      camera.quaternion.multiply(q0.setFromAxisAngle(zee, -screenAngle()));
+      camera.quaternion.multiply(q0.setFromAxisAngle(zee, -sa));
       if (needsRecenter) { yawOffset = -cameraYaw() + yawTo(holder.pos); needsRecenter = false; }
       qYaw.setFromAxisAngle(yAxis, yawOffset);
       camera.quaternion.premultiply(qYaw);
@@ -623,7 +668,6 @@ body {
     dot(f.h, '#e2474b', r); dot(f.L, '#e2474b', r); dot(f.R, '#e2474b', r);
     dot(f.m, '#3d8bff', r); dot(f.b, '#ffffff', r * 0.55); dot(f.me, '#ffd23f', r * 1.1);
   }
-  const mm = $('minimap'), mg = mm.getContext('2d');
   function snapshot() {
     return { me: [me.pos.x, me.pos.z], yaw: cameraYaw(), h: [holder.pos.x, holder.pos.z], hy: holder.facing + holder.headYaw,
       L: [recv.L.pos.x, recv.L.pos.z], R: [recv.R.pos.x, recv.R.pos.z], m: [mate.pos.x, mate.pos.z], b: [ball.position.x, ball.position.z] };
@@ -693,7 +737,6 @@ body {
     others.forEach(p => { p.g.position.copy(p.pos); p.g.rotation.y = p.facing; p.head.rotation.y = p.headYaw; });
     applyLook();
     updateMe(dt);
-    drawTop(mg, mm.width, mm.height, snapshot(), { x0: -16, x1: 16, z0: -12, z1: 16 });
     if (bannerT > 0) { bannerT -= dt; if (bannerT <= 0) $('banner').hidden = true; }
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
