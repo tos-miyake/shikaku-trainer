@@ -103,6 +103,12 @@ body {
 .mark.g { color: var(--good); } .mark.m { color: var(--mid); } .mark.b { color: var(--bad); }
 .item small { display: block; color: var(--ink-dim); font-size: 12.5px; }
 .tally { font-size: 13px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.drills { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.drills .btn { padding: 10px 6px; font-size: 14px; line-height: 1.3; }
+.drills .btn small { display: block; font-size: 11.5px; font-weight: 500; color: var(--ink-dim); }
+.drills .btn.sel small { color: var(--accent); }
+.bar { display: inline-block; width: 110px; height: 10px; border-radius: 5px; background: rgba(255,255,255,.15); vertical-align: middle; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 100%; background: var(--good); }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 
@@ -113,6 +119,7 @@ body {
     <div class="tag" id="task"><b>ワンサイドカット</b>　首を振って、危ない受け手へのパスコースを切りながら寄せよう</div>
     <div class="tag" id="mic"><b>声：</b><span id="micText">準備中</span></div>
     <div class="tag" id="heard" hidden></div>
+    <div class="tag" id="meter" hidden><span id="meterBar"><b>マーク確認</b> <span class="bar"><i id="meterFill"></i></span>　</span><span id="meterTime"></span></div>
   </div>
   <div class="stack" style="justify-items:end">
     <button class="btn" id="recenter" type="button">正面に戻す</button>
@@ -132,13 +139,13 @@ body {
 <div id="start" class="overlay">
   <div class="card">
     <h1>死角<span>トレーニング</span></h1>
-    <p>あなたはディフェンス。前の相手にボールが渡ります。左右に相手の受け手が2人、後ろに味方が1人います。</p>
-    <ul>
-      <li>ボールが来る前に首を振って、どっちの受け手が<b>危ないか</b>（前に出ている方）を見つけよう</li>
-      <li>そっちへのパスコースを体で切りながら寄せよう（ワンサイドカット）</li>
-      <li>反対側の受け手は味方にまかせる。声で <span class="say">「左いけ！」</span> <span class="say">「右いけ！」</span></li>
-      <li>寄せすぎて飛び込むと、かわされるよ</li>
-    </ul>
+    <div class="drills" role="group" aria-label="ドリルを選ぶ">
+      <button class="btn sel" type="button" data-drill="cut">ワンサイドカット<small>守備・声の指示</small></button>
+      <button class="btn" type="button" data-drill="mark">マークを外さない<small>守備・首振り</small></button>
+      <button class="btn" type="button" data-drill="run">背後へ飛び出す<small>攻撃・視線の外</small></button>
+    </div>
+    <p id="lead"></p>
+    <ul id="intro"></ul>
     <div class="levels">レベル
       <button class="btn sel" type="button" data-level="1">1</button>
       <button class="btn" type="button" data-level="2">2</button>
@@ -163,7 +170,7 @@ body {
     </div>
     <div class="row">
       <button class="btn primary" id="next" type="button">次の1本</button>
-      <button class="btn" id="toMenu" type="button">レベルを変える</button>
+      <button class="btn" id="toMenu" type="button">ドリル・レベルを変える</button>
     </div>
   </div>
 </div>
@@ -189,7 +196,7 @@ body {
   sun.position.set(10, 30, 10);
   scene.add(sun);
 
-  // coordinate system: +z is toward the goal we defend (z = 26). yaw 0 = facing +z
+  // coordinate system: +z is toward the goal at z = 26. yaw 0 = facing +z
   const FW = 68, FL = 52;
   const tex = (() => {
     const c = document.createElement('canvas'); c.width = 1024; c.height = 784;
@@ -219,6 +226,8 @@ body {
   })();
 
   // ---------- players ----------
+  // The same four figures are re-cast for each drill (colour, name tag, who is on the pitch)
+  const RED = 0xe2474b, RED_T = '#ff8f8f', BLUE = 0x3d8bff, BLUE_T = '#9cc4ff';
   function label(text, color) {
     const c = document.createElement('canvas'); c.width = 256; c.height = 64;
     const g = c.getContext('2d');
@@ -227,10 +236,11 @@ body {
     const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
     s.scale.set(1.8, 0.45, 1); return s;
   }
-  function makePlayer(shirt, text, textColor) {
+  function makePlayer() {
     const g = new THREE.Group();
     const skin = new THREE.MeshLambertMaterial({ color: 0xe9c29b });
-    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.17, 0.62, 14), new THREE.MeshLambertMaterial({ color: shirt }));
+    const shirtMat = new THREE.MeshLambertMaterial({ color: RED });
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.17, 0.62, 14), shirtMat);
     body.position.y = 1.0; g.add(body);
     const shorts = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.2, 14), new THREE.MeshLambertMaterial({ color: 0x1d1d1d }));
     shorts.position.y = 0.62; g.add(shorts);
@@ -243,17 +253,24 @@ body {
     head.add(new THREE.Mesh(new THREE.SphereGeometry(0.13, 16, 12), skin));
     const eyes = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.04, 0.04), new THREE.MeshBasicMaterial({ color: 0x111111 }));
     eyes.position.set(0, 0.02, 0.12); head.add(eyes);
-    const tagS = label(text, textColor); tagS.position.y = 1.95; g.add(tagS);
     const shadow = new THREE.Mesh(new THREE.CircleGeometry(0.32, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 }));
     shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.01; g.add(shadow);
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.7, 32), new THREE.MeshBasicMaterial({ color: 0xffd23f, transparent: true, opacity: 0.85 }));
     ring.rotation.x = -Math.PI / 2; ring.position.y = 0.02; ring.visible = false; g.add(ring);
     scene.add(g);
-    return { g, head, legs, ring, pos: new THREE.Vector3(), facing: 0, headYaw: 0 };
+    return { g, head, legs, ring, shirtMat, tag: null, pos: new THREE.Vector3(), facing: 0, headYaw: 0, active: true };
   }
-  const holder = makePlayer(0xe2474b, '相手（ボール）', '#ff8f8f');
-  const recv = { L: makePlayer(0xe2474b, '相手', '#ff8f8f'), R: makePlayer(0xe2474b, '相手', '#ff8f8f') };
-  const mate = makePlayer(0x3d8bff, '味方', '#9cc4ff');
+  function setRole(p, shirt, text, textColor) {
+    p.shirtMat.color.setHex(shirt);
+    if (p.tag) { p.g.remove(p.tag); p.tag.material.map.dispose(); p.tag.material.dispose(); }
+    p.tag = label(text, textColor); p.tag.position.y = 1.95; p.g.add(p.tag);
+    p.active = true; p.g.visible = true; p.ring.visible = false;
+    p.legs[1].rotation.x = 0; p.facing = 0; p.headYaw = 0;
+  }
+  function bench(p) { p.active = false; p.g.visible = false; p.pos.set(0, 0, 300); }
+  const holder = makePlayer();
+  const recv = { L: makePlayer(), R: makePlayer() };
+  const mate = makePlayer();
   const others = [holder, recv.L, recv.R, mate];
   const ball = new THREE.Mesh(new THREE.SphereGeometry(0.11, 18, 14), new THREE.MeshLambertMaterial({ color: 0xffffff }));
   scene.add(ball);
@@ -271,7 +288,7 @@ body {
     return (window.orientation || 0) * deg;
   }
   function onOri(e) { if (e.alpha !== null) devOri = e; }
-  // look yaw: 0 = looking toward -z (toward the attackers)
+  // look yaw: 0 = looking toward -z
   function cameraYaw() {
     const d = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
     return Math.atan2(-d.x, -d.z);
@@ -292,6 +309,16 @@ body {
     }
   }
   const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const flatDist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+  // facing angle of the other players: they face (sin f, cos f)
+  const angTo = (a, b) => Math.atan2(b.x - a.x, b.z - a.z);
+  const turnToward = (a, b, step) => { const d = wrap(b - a); return Math.abs(d) <= step ? b : a + Math.sign(d) * step; };
+  function moveTo(p, x, z, step) {
+    const dx = x - p.x, dz = z - p.z, L = Math.hypot(dx, dz);
+    if (L <= step) { p.x = x; p.z = z; } else { p.x += dx / L * step; p.z += dz / L * step; }
+  }
+  const inMyView = (p, half) => Math.abs(wrap(yawTo(p) - cameraYaw())) < half;
 
   // ---------- input ----------
   const joy = { id: null, ox: 0, oy: 0, x: 0, y: 0 }, drag = { id: null, lx: 0, ly: 0 };
@@ -335,9 +362,10 @@ body {
   // ---------- voice ----------
   // The teammate goes to the side you name: 「左いけ！」→ 味方が左の受け手へ
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  let rec = null, voiceOn = false;
+  let rec = null, voiceOn = false, voiceFallback = false;
   function setMic(text, on) { $('micText').textContent = text; $('mic').classList.toggle('on', !!on); }
-  function showButtons() { $('calls').hidden = false; }
+  function syncCalls() { $('calls').hidden = !(voiceFallback && drill.voice); }
+  function showButtons() { voiceFallback = true; syncCalls(); }
   function parseSide(txt) {
     const l = /左|ひだり|レフト/.test(txt), r = /右|みぎ|ライト/.test(txt);
     if (l && !r) return 'L'; if (r && !l) return 'R'; return null;
@@ -371,54 +399,41 @@ body {
   }
   document.querySelectorAll('#calls [data-call]').forEach(b => b.addEventListener('click', () => makeCall(b.dataset.call, 'ボタン')));
 
-  // ---------- drill ----------
-  const LEVELS = {
-    1: { decide: 3.2, hint: true, note: '危ない受け手に印が出る・相手はゆっくり' },
-    2: { decide: 2.5, hint: false, note: '印なし・相手の判断がふつう' },
-    3: { decide: 1.8, hint: false, note: '印なし・相手の判断が速い' },
-  };
-  let level = 1;
-  document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => {
-    level = +b.dataset.level;
-    document.querySelectorAll('[data-level]').forEach(x => x.classList.toggle('sel', x === b));
-    $('levelNote').textContent = LEVELS[level].note;
-  }));
-  const tally = { n: 0, ok: 0 };
-  let rep = null;
-  const BALL_TRAVEL = 1.3; // s, ball travelling to the holder before he can decide
-
-  function newRep() {
-    const side = Math.random() < 0.5 ? 'L' : 'R';
-    const sx = { L: -1, R: 1 };
-    rep = {
-      phase: 'incoming', t: 0, side, live: 0,
-      decideAt: LEVELS[level].decide * (0.85 + Math.random() * 0.3),
-      call: null, callT: null, callBy: null,
-      seen: { L: false, R: false, M: false }, seenBeforeBall: 0,
-      decision: null, passTo: null, passT: 0, passFrom: null,
-      nearSpeed: 0, distAtDecision: 0, outcome: null, rec: [], recT: 0,
-    };
-    holder.pos.set(0, 0, -6); holder.facing = 0; holder.headYaw = 0;
-    for (const s of ['L', 'R']) {
-      const danger = s === side;
-      recv[s].pos.set(sx[s] * (danger ? 10 : 12), 0, danger ? 0 : -3);
-      recv[s].ring.visible = danger && LEVELS[level].hint;
-    }
-    me.pos.set((Math.random() - 0.5) * 4, 0, 6.5); me.vel.set(0, 0, 0);
-    mate.pos.set(-sx[side] * 3, 0, 5); mate.target = null;
-    ball.position.set(0, 0.11, -24);
-    needsRecenter = true;
-    banner('', 0);
+  // ---------- shared drill plumbing ----------
+  // Each drill: start() sets up a rep, update(dt) runs it and calls finish(outcome),
+  // items() grades it, outcome() explains it, snap() describes one top-view frame.
+  let drillKey = 'cut', drill = null, level = 1, rep = null;
+  const tally = { cut: { n: 0, ok: 0 }, mark: { n: 0, ok: 0 }, run: { n: 0, ok: 0 } };
+  const VIEW = 35 * deg; // your central view: what counts as "checked"
+  function baseRep(extra) { return Object.assign({ phase: 'live', t: 0, rec: [], recT: 0, outcome: null }, extra); }
+  function showTally() { const t = tally[drillKey]; $('tally').textContent = `${t.n}本中 ${t.ok}本成功`; }
+  let bannerT = 0;
+  function banner(text, sec) { $('banner').textContent = text; $('banner').hidden = !text; bannerT = sec; }
+  function finish(outcome) {
+    rep.rec.push(snapshot());
+    rep.outcome = outcome; rep.phase = 'ended';
+    const win = drill.wins.includes(outcome);
+    const t = tally[drillKey]; t.n++; if (win) t.ok++;
+    showTally();
+    banner(win ? 'ナイス！' : drill.failBanner, 1.0);
+    setTimeout(showResult, 900);
   }
   function makeCall(s, by) {
-    if (!rep || rep.phase === 'ended') return;
+    if (!rep || rep.phase === 'ended' || !drill.voice) return;
     if (rep.call === s) return;
     rep.call = s; rep.callT = rep.t; rep.callBy = by;
     banner(s === 'L' ? '味方→左！' : '味方→右！', 1.0);
   }
-  let bannerT = 0;
-  function banner(text, sec) { $('banner').textContent = text; $('banner').hidden = !text; bannerT = sec; }
+  const atFeet = (p, dist) => ball.position.set(p.pos.x + Math.sin(p.facing) * dist, 0.11, p.pos.z + Math.cos(p.facing) * dist);
 
+  // ========== drill 1: one-side cut (defence, voice) ==========
+  const CUT_LV = {
+    1: { decide: 3.2, hint: true, note: '危ない受け手に印が出る・相手はゆっくり' },
+    2: { decide: 2.5, hint: false, note: '印なし・相手の判断がふつう' },
+    3: { decide: 1.8, hint: false, note: '印なし・相手の判断が速い' },
+  };
+  const BALL_TRAVEL = 1.3; // s, ball travelling to the holder before he can decide
+  const sideJ = { L: '左', R: '右' };
   // distance from point p to segment a→b, and position t along it
   function segInfo(p, a, b) {
     const abx = b.x - a.x, abz = b.z - a.z, L2 = abx * abx + abz * abz;
@@ -432,76 +447,154 @@ body {
   const distToHolder = () => Math.hypot(me.pos.x - holder.pos.x, me.pos.z - holder.pos.z);
   const mySpeed = () => Math.hypot(me.vel.x, me.vel.z);
 
-  function updateDrill(dt) {
-    rep.t += dt;
-    // what is in your central view (±30°) counts as "checked"
-    const gy = cameraYaw();
-    const inView = p => Math.abs(wrap(yawTo(p) - gy)) < 30 * deg;
-    if (!rep.decision) {
-      if (inView(recv.L.pos)) rep.seen.L = true;
-      if (inView(recv.R.pos)) rep.seen.R = true;
-      if (inView(mate.pos)) rep.seen.M = true;
-    }
-
-    // receivers: the dangerous one drifts forward into space
-    if (!rep.decision) recv[rep.side].pos.z = Math.min(4, recv[rep.side].pos.z + dt * 0.6);
-    for (const s of ['L', 'R']) { recv[s].facing = Math.atan2(holder.pos.x - recv[s].pos.x, holder.pos.z - recv[s].pos.z); recv[s].headYaw = 0; }
-
-    // teammate: holds a covering spot until told, then goes to that receiver (goal side)
-    if (rep.call) mate.target = new THREE.Vector3(recv[rep.call].pos.x * 0.92, 0, recv[rep.call].pos.z + 1.2);
-    const mt = mate.target || new THREE.Vector3(me.pos.x * 0.4 + (rep.side === 'L' ? 3 : -3), 0, Math.min(me.pos.z + 2, 6));
-    const mv = mt.clone().sub(mate.pos); const md = mv.length();
-    if (md > 0.05) mate.pos.add(mv.multiplyScalar(Math.min(1, (mate.target ? 6 : 3) * dt / md)));
-    mate.facing = Math.atan2(holder.pos.x - mate.pos.x, holder.pos.z - mate.pos.z); mate.headYaw = 0;
-
-    const atFeet = (dist) => ball.position.set(holder.pos.x + Math.sin(holder.facing) * dist, 0.11, holder.pos.z + Math.cos(holder.facing) * dist);
-    if (rep.phase === 'incoming') {
-      const k = Math.min(1, rep.t / BALL_TRAVEL);
-      ball.position.set(0, 0.11, -24 + (holder.pos.z - 0.45 + 24) * k);
-      holder.facing = Math.PI; holder.headYaw = 0.9 * Math.sin(rep.t * 3); // scanning before receiving
-      if (k >= 1) { rep.phase = 'live'; rep.seenBeforeBall = rep.seen.L + rep.seen.R + rep.seen.M; }
-    } else if (rep.phase === 'live') {
-      rep.live += dt;
-      holder.facing = wrap(holder.facing + wrap(0 - holder.facing) * Math.min(1, dt * 4));
-      holder.headYaw = 0.8 * Math.sin(rep.live * 3.2);
-      const d = distToHolder();
-      holder.pos.z += (d < 3 ? 0.2 : 0.8) * dt;
-      atFeet(0.45);
-      if (d < 2.0) rep.nearSpeed = Math.max(rep.nearSpeed, mySpeed());
-      if (rep.live >= rep.decideAt || d < 1.3) decide();
-    } else {
-      rep.passT += dt;
-      if (rep.phase === 'windup') {
-        // kicking leg swings back: this is the cue you will later learn to read
-        holder.legs[1].rotation.x = -0.9 * Math.min(1, rep.passT / 0.35);
-        holder.facing = Math.atan2(recv[rep.passTo].pos.x - holder.pos.x, recv[rep.passTo].pos.z - holder.pos.z);
-        holder.headYaw = 0;
-        atFeet(0.45);
-        if (rep.passT >= 0.35) { rep.phase = 'pass'; rep.passT = 0; rep.passFrom = ball.position.clone(); holder.legs[1].rotation.x = 0.6; }
-      } else if (rep.phase === 'pass') {
-        const target = recv[rep.passTo].pos, from = rep.passFrom;
-        const L = Math.hypot(target.x - from.x, target.z - from.z), k = Math.min(1, rep.passT * 13 / L);
-        ball.position.set(from.x + (target.x - from.x) * k, 0.11, from.z + (target.z - from.z) * k);
-        if (Math.hypot(ball.position.x - me.pos.x, ball.position.z - me.pos.z) < 0.8) finish('intercept');
-        else if (Math.hypot(ball.position.x - mate.pos.x, ball.position.z - mate.pos.z) < 0.9) finish('mateCut');
-        else if (k >= 1) finish('passed');
-      } else if (rep.phase === 'beaten') {
-        const dir = Math.sign(holder.pos.x - me.pos.x) || 1;
-        holder.pos.z += 4.5 * dt; holder.pos.x += dir * 2.5 * dt; holder.facing = 0.4 * dir;
-        atFeet(0.6);
-        if (rep.passT > 1.2) finish('beaten');
-      } else if (rep.phase === 'stuck') {
-        holder.pos.z -= 0.8 * dt; holder.facing = Math.PI; holder.headYaw = 0.9 * Math.sin(rep.passT * 6);
-        atFeet(0.45);
-        if (rep.passT > 1.2) finish('stuck');
+  const cut = {
+    name: 'ワンサイドカット', task: '首を振って、危ない受け手へのパスコースを切りながら寄せよう', voice: true, levels: CUT_LV,
+    lead: 'あなたはディフェンス。前の相手にボールが渡ります。左右に相手の受け手が2人、後ろに味方が1人います。',
+    intro: [
+      'ボールが来る前に首を振って、どっちの受け手が<b>危ないか</b>（前に出ている方）を見つけよう',
+      'そっちへのパスコースを体で切りながら寄せよう（ワンサイドカット）',
+      '反対側の受け手は味方にまかせる。声で <span class="say">「左いけ！」</span> <span class="say">「右いけ！」</span>',
+      '寄せすぎて飛び込むと、かわされるよ',
+    ],
+    wins: ['intercept', 'mateCut', 'stuck'], failBanner: '通された…',
+    replayWin: { x0: -14, x1: 14, z0: -10, z1: 14 }, mapWin: { x0: -16, x1: 16, z0: -12, z1: 16 },
+    start() {
+      setRole(holder, RED, '相手（ボール）', RED_T); setRole(recv.L, RED, '相手', RED_T); setRole(recv.R, RED, '相手', RED_T);
+      setRole(mate, BLUE, '味方', BLUE_T);
+      const side = Math.random() < 0.5 ? 'L' : 'R';
+      const sx = { L: -1, R: 1 };
+      rep = baseRep({
+        phase: 'incoming', side, live: 0,
+        decideAt: CUT_LV[level].decide * (0.85 + Math.random() * 0.3),
+        call: null, callT: null, callBy: null,
+        seen: { L: false, R: false, M: false }, seenBeforeBall: 0,
+        decision: null, passTo: null, passT: 0, passFrom: null,
+        nearSpeed: 0, distAtDecision: 0,
+      });
+      holder.pos.set(0, 0, -6); holder.facing = 0; holder.headYaw = 0;
+      for (const s of ['L', 'R']) {
+        const danger = s === side;
+        recv[s].pos.set(sx[s] * (danger ? 10 : 12), 0, danger ? 0 : -3);
+        recv[s].ring.visible = danger && CUT_LV[level].hint;
       }
-    }
-    if (rep.phase !== 'windup') holder.legs[1].rotation.x *= 0.9;
-    // record for the replay
-    rep.recT += dt;
-    if (rep.recT >= 0.1 && rep.phase !== 'ended') { rep.recT = 0; rep.rec.push(snapshot()); }
-  }
-  function decide() {
+      me.pos.set((Math.random() - 0.5) * 4, 0, 6.5); me.vel.set(0, 0, 0);
+      mate.pos.set(-sx[side] * 3, 0, 5); mate.target = null;
+      ball.position.set(0, 0.11, -24);
+    },
+    update(dt) {
+      rep.t += dt;
+      // what is in your central view (±30°) counts as "checked"
+      const gy = cameraYaw();
+      const inView = p => Math.abs(wrap(yawTo(p) - gy)) < 30 * deg;
+      if (!rep.decision) {
+        if (inView(recv.L.pos)) rep.seen.L = true;
+        if (inView(recv.R.pos)) rep.seen.R = true;
+        if (inView(mate.pos)) rep.seen.M = true;
+      }
+
+      // receivers: the dangerous one drifts forward into space
+      if (!rep.decision) recv[rep.side].pos.z = Math.min(4, recv[rep.side].pos.z + dt * 0.6);
+      for (const s of ['L', 'R']) { recv[s].facing = Math.atan2(holder.pos.x - recv[s].pos.x, holder.pos.z - recv[s].pos.z); recv[s].headYaw = 0; }
+
+      // teammate: holds a covering spot until told, then goes to that receiver (goal side)
+      if (rep.call) mate.target = new THREE.Vector3(recv[rep.call].pos.x * 0.92, 0, recv[rep.call].pos.z + 1.2);
+      const mt = mate.target || new THREE.Vector3(me.pos.x * 0.4 + (rep.side === 'L' ? 3 : -3), 0, Math.min(me.pos.z + 2, 6));
+      const mv = mt.clone().sub(mate.pos); const md = mv.length();
+      if (md > 0.05) mate.pos.add(mv.multiplyScalar(Math.min(1, (mate.target ? 6 : 3) * dt / md)));
+      mate.facing = Math.atan2(holder.pos.x - mate.pos.x, holder.pos.z - mate.pos.z); mate.headYaw = 0;
+
+      if (rep.phase === 'incoming') {
+        const k = Math.min(1, rep.t / BALL_TRAVEL);
+        ball.position.set(0, 0.11, -24 + (holder.pos.z - 0.45 + 24) * k);
+        holder.facing = Math.PI; holder.headYaw = 0.9 * Math.sin(rep.t * 3); // scanning before receiving
+        if (k >= 1) { rep.phase = 'live'; rep.seenBeforeBall = rep.seen.L + rep.seen.R + rep.seen.M; }
+      } else if (rep.phase === 'live') {
+        rep.live += dt;
+        holder.facing = wrap(holder.facing + wrap(0 - holder.facing) * Math.min(1, dt * 4));
+        holder.headYaw = 0.8 * Math.sin(rep.live * 3.2);
+        const d = distToHolder();
+        holder.pos.z += (d < 3 ? 0.2 : 0.8) * dt;
+        atFeet(holder, 0.45);
+        if (d < 2.0) rep.nearSpeed = Math.max(rep.nearSpeed, mySpeed());
+        if (rep.live >= rep.decideAt || d < 1.3) cutDecide();
+      } else {
+        rep.passT += dt;
+        if (rep.phase === 'windup') {
+          // kicking leg swings back: the same cue the 背後へ飛び出す drill trains you to read
+          holder.legs[1].rotation.x = -0.9 * Math.min(1, rep.passT / 0.35);
+          holder.facing = Math.atan2(recv[rep.passTo].pos.x - holder.pos.x, recv[rep.passTo].pos.z - holder.pos.z);
+          holder.headYaw = 0;
+          atFeet(holder, 0.45);
+          if (rep.passT >= 0.35) { rep.phase = 'pass'; rep.passT = 0; rep.passFrom = ball.position.clone(); holder.legs[1].rotation.x = 0.6; }
+        } else if (rep.phase === 'pass') {
+          const target = recv[rep.passTo].pos, from = rep.passFrom;
+          const L = Math.hypot(target.x - from.x, target.z - from.z), k = Math.min(1, rep.passT * 13 / L);
+          ball.position.set(from.x + (target.x - from.x) * k, 0.11, from.z + (target.z - from.z) * k);
+          if (Math.hypot(ball.position.x - me.pos.x, ball.position.z - me.pos.z) < 0.8) finish('intercept');
+          else if (Math.hypot(ball.position.x - mate.pos.x, ball.position.z - mate.pos.z) < 0.9) finish('mateCut');
+          else if (k >= 1) finish('passed');
+        } else if (rep.phase === 'beaten') {
+          const dir = Math.sign(holder.pos.x - me.pos.x) || 1;
+          holder.pos.z += 4.5 * dt; holder.pos.x += dir * 2.5 * dt; holder.facing = 0.4 * dir;
+          atFeet(holder, 0.6);
+          if (rep.passT > 1.2) finish('beaten');
+        } else if (rep.phase === 'stuck') {
+          holder.pos.z -= 0.8 * dt; holder.facing = Math.PI; holder.headYaw = 0.9 * Math.sin(rep.passT * 6);
+          atFeet(holder, 0.45);
+          if (rep.passT > 1.2) finish('stuck');
+        }
+      }
+    },
+    items() {
+      const r = rep, other = r.side === 'L' ? 'R' : 'L';
+      const items = [];
+      // 1. course cut
+      const cutMine = r.decision && r.decision.blockedMe[r.side];
+      const cutMate = r.decision && r.decision.marked[r.side];
+      if (r.outcome === 'beaten') items.push(['b', 'コースを切る', '飛び込んでかわされた。2mまで来たらスピードを落として、半身で止まろう']);
+      else if (cutMine) items.push(['g', 'コースを切る', `${sideJ[r.side]}の危ない受け手へのコースを体で消せた`]);
+      else if (cutMate) items.push(['m', 'コースを切る', `${sideJ[r.side]}は味方が消してくれた。自分の体でも切れるとベスト`]);
+      else items.push(['b', 'コースを切る', `${sideJ[r.side]}の受け手へのコースが空いていた。ボールと${sideJ[r.side]}の受け手を結ぶ線の上に体を入れながら寄せよう`]);
+      // 2. scanning
+      const n = r.seen.L + r.seen.R + r.seen.M;
+      const missing = [!r.seen.L && '左の受け手', !r.seen.R && '右の受け手', !r.seen.M && '後ろの味方'].filter(Boolean);
+      items.push([n === 3 ? 'g' : n === 2 ? 'm' : 'b', '首振り',
+        n === 3 ? (r.seenBeforeBall === 3 ? 'ボールが来る前に3人とも見られた' : '3人とも見られた。ボールが来る前に終われるともっと良い')
+                : `見ていない：${missing.join('、')}。寄せる前に首を振って確認しよう`]);
+      // 3. voice call
+      if (!r.call) items.push(['b', '声の指示', `味方に指示がなかった。「${sideJ[other]}いけ！」で反対側をまかせよう`]);
+      else if (r.call === r.side) items.push(['b', '声の指示', `「${sideJ[r.side]}」と言ったけど、そっちは自分が切る側。味方には反対の「${sideJ[other]}いけ！」`]);
+      else if (r.callT > BALL_TRAVEL + 0.8) items.push(['m', '声の指示', `「${sideJ[other]}いけ」は正しいけど遅い。ボールが来る前に言おう`]);
+      else items.push(['g', '声の指示', `「${sideJ[other]}いけ」をいいタイミングで出せた（${r.callBy}）`]);
+      // 4. approach
+      const d = r.distAtDecision;
+      if (r.outcome === 'beaten') items.push(['b', '寄せ', `近くで秒速${r.nearSpeed.toFixed(1)}m。止まれずに飛び込んだ`]);
+      else if (d > 4.5) items.push(['b', '寄せ', `相手が判断した時、まだ${d.toFixed(1)}m離れていた。もっと早く寄せよう`]);
+      else if (d > 2.8) items.push(['m', '寄せ', `相手が判断した時${d.toFixed(1)}m。あと一歩寄せたい`]);
+      else items.push(['g', '寄せ', `相手が判断した時${d.toFixed(1)}m。いい距離まで寄せられた`]);
+      return items;
+    },
+    outcome() {
+      const OUT = {
+        intercept: ['インターセプト！', 'パスを自分でカットした。'],
+        mateCut: ['味方がカット！', '指示どおり味方がパスを奪った。'],
+        stuck: ['出しどころを消した！', '両方のコースが消えて、相手は下げるしかなかった。'],
+        passed: ['パスを通された', `${sideJ[rep.passTo]}の受け手へのコースが空いていた。` + (rep.passTo === rep.side ? '危ない側を体で切れていなかった。' : '反対側を味方にまかせられていなかった。')],
+        beaten: ['かわされた', '勢いよく飛び込みすぎて、逆を取られた。'],
+      };
+      return OUT[rep.outcome];
+    },
+    snap() {
+      const P = (p, c, s) => [p.pos.x, p.pos.z, c, s];
+      return {
+        lines: ['L', 'R'].map(k => [holder.pos.x, holder.pos.z, recv[k].pos.x, recv[k].pos.z]),
+        gazes: [[holder.pos.x, holder.pos.z, holder.facing + holder.headYaw]],
+        dots: [P(holder, '#e2474b'), P(recv.L, '#e2474b'), P(recv.R, '#e2474b'), P(mate, '#3d8bff'), [ball.position.x, ball.position.z, '#ffffff', 0.55]],
+        myHalf: 30 * deg,
+      };
+    },
+  };
+  function cutDecide() {
     const other = rep.side === 'L' ? 'R' : 'L';
     rep.distAtDecision = distToHolder();
     rep.decision = { blockedMe: { L: laneBlockedByMe('L'), R: laneBlockedByMe('R') }, marked: { L: markedByMate('L'), R: markedByMate('R') } };
@@ -511,61 +604,312 @@ body {
     if (open.length) { rep.passTo = open[0]; rep.phase = 'windup'; }
     else { rep.phase = 'stuck'; banner('出しどころなし！', 1.2); }
   }
-  function finish(outcome) {
-    rep.rec.push(snapshot());
-    rep.outcome = outcome; rep.phase = 'ended';
-    const win = outcome === 'intercept' || outcome === 'mateCut' || outcome === 'stuck';
-    tally.n++; if (win) tally.ok++;
-    $('tally').textContent = `${tally.n}本中 ${tally.ok}本成功`;
-    banner(win ? 'ナイス！' : '通された…', 1.0);
-    setTimeout(showResult, 900);
-  }
 
-  // ---------- scoring ----------
-  const sideJ = { L: '左', R: '右' };
-  function grade() {
-    const r = rep, other = r.side === 'L' ? 'R' : 'L';
-    const items = [];
-    // 1. course cut
-    const cutMine = r.decision && r.decision.blockedMe[r.side];
-    const cutMate = r.decision && r.decision.marked[r.side];
-    if (r.outcome === 'beaten') items.push(['b', 'コースを切る', '飛び込んでかわされた。2mまで来たらスピードを落として、半身で止まろう']);
-    else if (cutMine) items.push(['g', 'コースを切る', `${sideJ[r.side]}の危ない受け手へのコースを体で消せた`]);
-    else if (cutMate) items.push(['m', 'コースを切る', `${sideJ[r.side]}は味方が消してくれた。自分の体でも切れるとベスト`]);
-    else items.push(['b', 'コースを切る', `${sideJ[r.side]}の受け手へのコースが空いていた。ボールと${sideJ[r.side]}の受け手を結ぶ線の上に体を入れながら寄せよう`]);
-    // 2. scanning
-    const n = r.seen.L + r.seen.R + r.seen.M;
-    const missing = [!r.seen.L && '左の受け手', !r.seen.R && '右の受け手', !r.seen.M && '後ろの味方'].filter(Boolean);
-    items.push([n === 3 ? 'g' : n === 2 ? 'm' : 'b', '首振り',
-      n === 3 ? (r.seenBeforeBall === 3 ? 'ボールが来る前に3人とも見られた' : '3人とも見られた。ボールが来る前に終われるともっと良い')
-              : `見ていない：${missing.join('、')}。寄せる前に首を振って確認しよう`]);
-    // 3. voice call
-    if (!r.call) items.push(['b', '声の指示', `味方に指示がなかった。「${sideJ[other]}いけ！」で反対側をまかせよう`]);
-    else if (r.call === r.side) items.push(['b', '声の指示', `「${sideJ[r.side]}」と言ったけど、そっちは自分が切る側。味方には反対の「${sideJ[other]}いけ！」`]);
-    else if (r.callT > BALL_TRAVEL + 0.8) items.push(['m', '声の指示', `「${sideJ[other]}いけ」は正しいけど遅い。ボールが来る前に言おう`]);
-    else items.push(['g', '声の指示', `「${sideJ[other]}いけ」をいいタイミングで出せた（${r.callBy}）`]);
-    // 4. approach
-    const d = r.distAtDecision;
-    if (r.outcome === 'beaten') items.push(['b', '寄せ', `近くで秒速${r.nearSpeed.toFixed(1)}m。止まれずに飛び込んだ`]);
-    else if (d > 4.5) items.push(['b', '寄せ', `相手が判断した時、まだ${d.toFixed(1)}m離れていた。もっと早く寄せよう`]);
-    else if (d > 2.8) items.push(['m', '寄せ', `相手が判断した時${d.toFixed(1)}m。あと一歩寄せたい`]);
-    else items.push(['g', '寄せ', `相手が判断した時${d.toFixed(1)}m。いい距離まで寄せられた`]);
-    return items;
-  }
-  const OUT = {
-    intercept: ['インターセプト！', 'パスを自分でカットした。'],
-    mateCut: ['味方がカット！', '指示どおり味方がパスを奪った。'],
-    stuck: ['出しどころを消した！', '両方のコースが消えて、相手は下げるしかなかった。'],
-    passed: ['パスを通された', ''],
-    beaten: ['かわされた', '勢いよく飛び込みすぎて、逆を取られた。'],
+  // ========== drill 2: keep your mark (defence, no ball-watching) ==========
+  // Three attackers pass the ball around in front. Your mark keeps sliding into the space
+  // behind your shoulder; it freezes while you look at it. Lose sight of it too long → it runs in behind.
+  const MARK_LV = {
+    1: { limit: 3.0, speed: 2.6, meter: true, note: 'メーターあり・マークはゆっくり' },
+    2: { limit: 2.4, speed: 3.3, meter: true, note: 'メーターあり・マークの動きがふつう' },
+    3: { limit: 1.8, speed: 4.0, meter: false, note: 'メーターなし・マークがすばやく背後をねらう' },
   };
+  const MARK_TIME = 15, BALL_LOST = 3.5;
+  const passers = [holder, recv.L, recv.R];
+  function circulate(dt) {
+    if (!rep.passTo) {
+      const o = rep.owner;
+      o.facing = angTo(o.pos, mate.pos); // looking for the pass into your mark
+      atFeet(o, 0.45);
+      rep.nextPass -= dt;
+      if (rep.nextPass <= 0) {
+        const opts = passers.filter(p => p !== o);
+        rep.passTo = opts[Math.random() * opts.length | 0];
+        rep.passFrom = ball.position.clone(); rep.passT = 0;
+        o.legs[1].rotation.x = 0.6;
+      }
+    } else {
+      rep.passT += dt;
+      const to = rep.passTo.pos, from = rep.passFrom, L = flatDist(from, to), k = Math.min(1, rep.passT * 12 / L);
+      ball.position.set(from.x + (to.x - from.x) * k, 0.11, from.z + (to.z - from.z) * k);
+      if (k >= 1) { rep.owner = rep.passTo; rep.passTo = null; rep.nextPass = 1.1 + Math.random() * 0.9; }
+    }
+    passers.forEach(p => { if (p !== rep.owner || rep.passTo) p.facing = angTo(p.pos, ball.position); p.headYaw = 0; });
+  }
+  function markBreak(kind) {
+    rep.phase = 'break'; rep.kind = kind; rep.passT = 0; rep.passFrom = ball.position.clone(); rep.passTo = null;
+    rep.run = new THREE.Vector3(clamp(mate.pos.x * 0.7, -15, 15), 0, clamp(Math.max(me.pos.z, mate.pos.z) + 5, 4, 23));
+    banner(kind === 'mark' ? '背後を取られた！' : kind === 'ball' ? 'ボールを見失った！' : 'マークがフリー！', 1.2);
+  }
+  const mark = {
+    name: 'マークを外さない', task: 'ボールとマークを交互に見て、ゴール側でマークをケアしよう（15秒）', voice: false, levels: MARK_LV,
+    lead: 'あなたはディフェンス。前で相手3人がボールを回しています。近くにいる黄色い名前の「マーク」は、あなたの死角（背中側）に入ろうと動きます。',
+    intro: [
+      'ボールばかり見ていると、マークに背後を取られる。<b>首を振ってマークを確認</b>しよう',
+      'あなたが見ている間、マークは死角に入れない',
+      'マークより<b>ゴール側</b>（後ろ）に立って、2〜3mの距離をたもとう',
+      'ボールを見なさすぎてもダメ。ボールとマークを<b>交互に</b>見て、15秒守り切ろう',
+    ],
+    wins: ['held', 'stopped', 'cut'], failBanner: '外された…',
+    replayWin: { x0: -16, x1: 16, z0: -6, z1: 24 }, mapWin: { x0: -16, x1: 16, z0: -6, z1: 24 },
+    start() {
+      passers.forEach(p => setRole(p, RED, '相手', RED_T));
+      setRole(mate, RED, 'マーク', '#ffd23f');
+      mate.ring.visible = level === 1;
+      holder.pos.set((Math.random() - 0.5) * 6, 0, -3);
+      recv.L.pos.set(-13, 0, 1 + Math.random() * 3); recv.R.pos.set(13, 0, 1 + Math.random() * 3);
+      const side = Math.random() < 0.5 ? -1 : 1;
+      me.pos.set(0, 0, 12); me.vel.set(0, 0, 0);
+      mate.pos.set(side * 3, 0, 9.5);
+      rep = baseRep({
+        owner: holder, passTo: null, passFrom: null, passT: 0, nextPass: 1.0 + Math.random() * 0.6,
+        side, flipIn: 4 + Math.random() * 2, lostMark: 0, lostBall: 0, maxLost: 0, maxLostBall: 0, checks: 0, wasSeen: true,
+        n: 0, goalSide: 0, distSum: 0, kind: null, run: null,
+      });
+      holder.facing = angTo(holder.pos, mate.pos);
+      atFeet(holder, 0.45);
+    },
+    update(dt) {
+      const lv = MARK_LV[level];
+      rep.t += dt;
+      if (rep.phase === 'live') {
+        const seeMark = inMyView(mate.pos, VIEW), seeBall = inMyView(ball.position, VIEW);
+        if (seeMark) { if (!rep.wasSeen) rep.checks++; rep.lostMark = 0; } else rep.lostMark += dt;
+        rep.wasSeen = seeMark;
+        rep.lostBall = seeBall ? 0 : rep.lostBall + dt;
+        rep.maxLost = Math.max(rep.maxLost, rep.lostMark); rep.maxLostBall = Math.max(rep.maxLostBall, rep.lostBall);
+        const d = flatDist(me.pos, mate.pos);
+        rep.n++; rep.distSum += d; if (me.pos.z > mate.pos.z + 0.2) rep.goalSide++;
+        circulate(dt);
+        // the mark heads for the space behind your shoulder, and swaps shoulders now and then
+        if ((rep.flipIn -= dt) <= 0) { rep.side *= -1; rep.flipIn = 3.5 + Math.random() * 2.5; }
+        const a = cameraYaw() + Math.PI - rep.side * 0.65;
+        const tx = clamp(me.pos.x - Math.sin(a) * 3.0, -20, 20), tz = clamp(me.pos.z - Math.cos(a) * 3.0, -2, 23);
+        moveTo(mate.pos, tx, tz, (seeMark ? 0.7 : lv.speed) * dt);
+        mate.facing = angTo(mate.pos, ball.position); mate.headYaw = seeMark ? 0 : 0.6 * Math.sin(rep.t * 2.5);
+        const left = MARK_TIME - rep.t;
+        if (rep.lostMark > lv.limit) markBreak('mark');
+        else if (rep.lostBall > BALL_LOST) markBreak('ball');
+        else if (left <= 0) { if (me.pos.z > mate.pos.z + 0.2 && d <= 3.5) finish('held'); else markBreak('pos'); }
+        const frac = clamp(1 - rep.lostMark / lv.limit, 0, 1);
+        $('meterBar').hidden = !lv.meter;
+        $('meterFill').style.width = (frac * 100).toFixed(0) + '%';
+        $('meterFill').style.background = frac < 0.35 ? 'var(--bad)' : frac < 0.65 ? 'var(--mid)' : 'var(--good)';
+        $('meterTime').textContent = '残り' + Math.max(0, Math.ceil(left)) + '秒';
+      } else if (rep.phase === 'break') {
+        // the mark sprints in behind and the ball is played into its path
+        rep.passT += dt;
+        moveTo(mate.pos, rep.run.x, rep.run.z, 6.0 * dt);
+        mate.facing = angTo(mate.pos, ball.position); mate.headYaw = 0;
+        const from = rep.passFrom, L = Math.max(0.1, flatDist(from, rep.run)), k = Math.min(1, rep.passT * 13 / L);
+        ball.position.set(from.x + (rep.run.x - from.x) * k, 0.11, from.z + (rep.run.z - from.z) * k);
+        passers.forEach(p => { p.facing = angTo(p.pos, ball.position); });
+        if (flatDist(ball.position, me.pos) < 0.8) finish('cut');
+        else if (flatDist(ball.position, mate.pos) < 0.9) finish(flatDist(me.pos, mate.pos) < 1.4 ? 'stopped' : 'broke');
+        else if (rep.passT > 4) finish('broke');
+      }
+    },
+    items() {
+      const r = rep, lim = MARK_LV[level].limit, items = [];
+      const ml = r.maxLost.toFixed(1), bl = r.maxLostBall.toFixed(1);
+      if (r.kind === 'mark') items.push(['b', 'マークの確認', `マークを${lim}秒以上見なかった。ボールを見たら、すぐ首を振ってマークを見よう`]);
+      else if (r.maxLost < lim * 0.7) items.push(['g', 'マークの確認', `こまめに確認できた（${r.checks}回・いちばん長く見なかったのは${ml}秒）`]);
+      else items.push(['m', 'マークの確認', `マークを最長${ml}秒見なかった（限界${lim}秒）。もう少し早く首を振ろう`]);
+      if (r.kind === 'ball') items.push(['b', 'ボールの確認', `ボールを${BALL_LOST}秒以上見なかった。マークを見たら、ボールにも戻ろう`]);
+      else if (r.maxLostBall < 2.0) items.push(['g', 'ボールの確認', `ボールも見続けられた（見なかったのは最長${bl}秒）`]);
+      else items.push(['m', 'ボールの確認', `ボールを最長${bl}秒見なかった。マークとボールを交互に見よう`]);
+      const gs = r.n ? Math.round(r.goalSide / r.n * 100) : 0;
+      items.push([gs >= 80 ? 'g' : gs >= 50 ? 'm' : 'b', 'ゴール側に立つ',
+        gs >= 80 ? `${gs}%の時間、マークよりゴール側にいられた` : `マークよりゴール側にいたのは${gs}%の時間。マークとゴールの間に立とう`]);
+      const ad = r.n ? r.distSum / r.n : 0, ads = ad.toFixed(1);
+      if (ad >= 1.5 && ad <= 3.5) items.push(['g', '距離', `マークとの平均距離${ads}m。ちょうどいい`]);
+      else if (ad < 1.5) items.push(['m', '距離', `平均${ads}m。近すぎると背中側に回られやすい。2〜3mあけよう`]);
+      else if (ad <= 5) items.push(['m', '距離', `平均${ads}m。少し遠い。2〜3mまで近づこう`]);
+      else items.push(['b', '距離', `平均${ads}m。離れすぎ。パスが出てもすぐ寄せられる2〜3mに`]);
+      return items;
+    },
+    outcome() {
+      const o = rep.outcome;
+      if (o === 'held') return ['守り切った！', '15秒間、ボールとマークを交互に見て、ゴール側でマークをケアできた。'];
+      if (o === 'stopped') return ['寄せて止めた！', 'マークにパスが出たけど、近くにいたのですぐ止められた。'];
+      if (o === 'cut') return ['パスカット！', 'マークへのパスを自分でカットした。'];
+      return ['マークに外された', {
+        mark: 'ボールばかり見ている間に、マークに背中側へ入られた。',
+        ball: 'ボールを見ていない時間が長すぎて、出し手にフリーで狙われた。',
+        pos: '最後の時点でマークがフリーだった（ゴール側にいない、または離れすぎ）。',
+      }[rep.kind]];
+    },
+    snap() {
+      return {
+        dots: [...passers.map(p => [p.pos.x, p.pos.z, '#e2474b']), [mate.pos.x, mate.pos.z, '#ff9f40', 1.15], [ball.position.x, ball.position.z, '#ffffff', 0.55]],
+        gazes: [], myHalf: VIEW,
+      };
+    },
+  };
+
+  // ========== drill 3: run in behind (attack, the defender's gaze) ==========
+  // You are the forward. The defender's eyes are mostly on the ball, with quick checks toward where
+  // he last saw you; he only tracks what he sees. Stand where he can't see you and the ball together,
+  // then go on the passer's kick-back.
+  const RUN_LV = {
+    1: { react: 0.8, check: 2.2, look: 0.5, cone: true, note: 'DFの見ている範囲が地図に出る・DFの反応はおそめ' },
+    2: { react: 0.6, check: 1.7, look: 0.6, cone: true, note: 'DFの見ている範囲が地図に出る・反応ふつう' },
+    3: { react: 0.45, check: 1.3, look: 0.7, cone: false, note: '地図に表示なし・DFがよく首を振る' },
+  };
+  const DF_HALF = 55 * deg, HEAD_MAX = 100 * deg, WIND = 0.45, RUN_V = 2.8;
+  const run = {
+    name: '背後へ飛び出す', task: 'DFの視線の外に立って、味方の足の振り上げに合わせて裏へ飛び出そう', voice: false, levels: RUN_LV,
+    lead: 'あなたはフォワード。後ろの味方がボールを持っていて、背中側に相手DFが1人います。DFは首を振って、ボールとあなたを交互に見ています。',
+    intro: [
+      'まず首を振って、DFの位置と顔の向きを確認しよう',
+      'DFの<b>肩の後ろ、ボールと反対側</b>に立つと、DFはボールとあなたを同時に見られない',
+      '味方が<b>足を後ろに振り上げた瞬間</b>に、DFの裏（ゴール方向）へ飛び出そう',
+      'DFがボールを見ている間に走り出すと、反応が遅れる。早すぎるとオフサイド',
+    ],
+    wins: ['received'], failBanner: '残念…',
+    replayWin: { x0: -14, x1: 14, z0: -4, z1: 25 }, mapWin: { x0: -16, x1: 16, z0: -4, z1: 25 },
+    start() {
+      setRole(holder, BLUE, '味方（ボール）', BLUE_T); setRole(mate, RED, '相手DF', RED_T);
+      bench(recv.L); bench(recv.R);
+      holder.pos.set(-6 + Math.random() * 12, 0, -2); holder.facing = 0;
+      mate.pos.set((Math.random() - 0.5) * 3, 0, 15.5);
+      me.pos.set((Math.random() - 0.5) * 4, 0, 11.5); me.vel.set(0, 0, 0);
+      rep = baseRep({
+        kickAt: 3.6 + Math.random() * 2.6, windT: null, kickT: null, P: null, bv: null,
+        gaze: 0, checkIn: RUN_LV[level].check, checkT: 0, lastSeen: me.pos.clone(), seenT: 0, sawMe: true, dfGo: null,
+        runT: null, runSeen: null, sawBall: false, defChecks: 0, wasDef: false, angWind: null, offside: false,
+      });
+      atFeet(holder, 0.45);
+      mate.facing = angTo(mate.pos, ball.position); rep.gaze = mate.facing;
+    },
+    update(dt) {
+      const lv = RUN_LV[level], d = mate; // the "mate" figure plays the defender here
+      rep.t += dt;
+      const before = !rep.kickT;
+      if (before) {
+        if (inMyView(ball.position, VIEW)) rep.sawBall = true;
+        const sd = inMyView(d.pos, VIEW); if (sd && !rep.wasDef) rep.defChecks++; rep.wasDef = sd;
+      }
+
+      // defender's eyes: on the ball, with a check toward where he last saw you (then a search for you)
+      const toBall = angTo(d.pos, ball.position);
+      let want = toBall;
+      // once the passer winds up, his eyes stay on the ball: that is your moment
+      if (rep.phase === 'live' && rep.dfGo === null) {
+        if (rep.checkT > 0) {
+          rep.checkT -= dt;
+          want = angTo(d.pos, (rep.checkT < lv.look - 0.25 && !rep.sawMe) ? me.pos : rep.lastSeen);
+          if (rep.checkT <= 0) rep.checkIn = lv.check * (0.7 + Math.random() * 0.6);
+        } else if ((rep.checkIn -= dt) <= 0) rep.checkT = lv.look;
+      }
+      rep.gaze = turnToward(rep.gaze, d.facing + clamp(wrap(want - d.facing), -HEAD_MAX, HEAD_MAX), 7 * dt);
+      d.headYaw = wrap(rep.gaze - d.facing);
+      rep.sawMe = flatDist(d.pos, me.pos) < 1.6 || Math.abs(wrap(angTo(d.pos, me.pos) - rep.gaze)) < DF_HALF;
+      if (rep.sawMe) { rep.lastSeen.copy(me.pos); rep.seenT = rep.t; }
+
+      // your run: a burst toward goal. Before the pass, stopping cancels it
+      if (before && me.vel.z < 1.0) { rep.runT = null; rep.runSeen = null; }
+      if (me.vel.z > RUN_V && rep.runT === null) { rep.runT = rep.t; rep.runSeen = rep.sawMe; }
+      // a run he can see, he follows
+      if (rep.sawMe && me.vel.z > RUN_V) rep.dfGo = Math.min(rep.dfGo === null ? Infinity : rep.dfGo, rep.t + 0.2);
+
+      // defender's feet
+      if (rep.dfGo !== null && rep.t >= rep.dfGo) {
+        const tgt = before ? { x: me.pos.x, z: Math.min(22, me.pos.z + 1.2) } : rep.bv.left > 0 ? rep.P : ball.position;
+        moveTo(d.pos, tgt.x, tgt.z, 4.4 * dt);
+        if (flatDist(d.pos, tgt) > 0.2) d.facing = turnToward(d.facing, angTo(d.pos, tgt), 8 * dt);
+      } else if (before) {
+        // drops a step goal-side of where he last saw you, a little inside
+        moveTo(d.pos, rep.lastSeen.x * 0.5, clamp(rep.lastSeen.z + 1.5, 9, 19), 2.4 * dt);
+        d.facing = turnToward(d.facing, toBall, 4 * dt);
+      }
+
+      if (rep.phase === 'live') {
+        holder.facing = turnToward(holder.facing, 0, 3 * dt); holder.headYaw = 0.6 * Math.sin(rep.t * 2.2);
+        atFeet(holder, 0.45);
+        if (rep.t >= rep.kickAt - WIND) {
+          rep.phase = 'windup'; rep.windT = rep.t;
+          rep.angWind = Math.abs(wrap(angTo(d.pos, ball.position) - angTo(d.pos, me.pos))) / deg;
+        }
+      } else if (rep.phase === 'windup') {
+        // the cue: the kicking leg swings back
+        holder.legs[1].rotation.x = -0.9 * Math.min(1, (rep.t - rep.windT) / WIND);
+        holder.facing = turnToward(holder.facing, angTo(holder.pos, me.pos), 4 * dt); holder.headYaw = 0;
+        atFeet(holder, 0.45);
+        if (rep.t >= rep.kickAt) {
+          rep.phase = 'pass'; rep.kickT = rep.t; holder.legs[1].rotation.x = 0.6;
+          rep.offside = me.pos.z > d.pos.z + 0.3;
+          const react = rep.t + (rep.t - rep.seenT < 0.3 ? 0.15 : lv.react);
+          rep.dfGo = rep.dfGo === null ? react : Math.min(rep.dfGo, react);
+          // through ball into the space behind the defender, on your side
+          rep.P = new THREE.Vector3(clamp(me.pos.x + me.vel.x * 0.6, -10, 10), 0, clamp(Math.max(d.pos.z, me.pos.z) + 5.5, 12, 24.5));
+          const dx = rep.P.x - ball.position.x, dz = rep.P.z - ball.position.z, L = Math.hypot(dx, dz);
+          rep.bv = { x: dx / L, z: dz / L, s: 15, left: L, L };
+        }
+      } else if (rep.phase === 'pass') {
+        const since = rep.t - rep.kickT, step = rep.bv.s * dt;
+        ball.position.x += rep.bv.x * step; ball.position.z = Math.min(25.5, ball.position.z + rep.bv.z * step);
+        rep.bv.left -= step;
+        if (rep.bv.left <= 0) rep.bv.s = Math.max(0, Math.min(rep.bv.s, 3) - 2 * dt);
+        // a lofted ball over the defender: nobody can touch it until it lands at the spot
+        const k = clamp(1 - rep.bv.left / rep.bv.L, 0, 1);
+        ball.position.y = 0.11 + 4 * 2.2 * k * (1 - k);
+        if (rep.offside) { if (since > 0.6) finish('offside'); return; }
+        if (rep.bv.left > 0.3) return;
+        const dm = flatDist(me.pos, ball.position), dd = flatDist(d.pos, ball.position);
+        if (dm < 1.2 && dm <= dd) finish('received');
+        else if (dd < 0.9) finish('cleared');
+        else if (since > 5) finish('cleared');
+      }
+    },
+    items() {
+      const r = rep, items = [];
+      const a = Math.round(r.angWind);
+      if (a >= 100) items.push(['g', 'ボールと同時に見せない', `振り上げの時、DFから見てボールとあなたは${a}°はなれていた。同時には見られない位置に立てた`]);
+      else if (a >= 65) items.push(['m', 'ボールと同時に見せない', `振り上げの時の角度は${a}°。もう少しDFの肩の後ろ（ボールと反対側）へ`]);
+      else items.push(['b', 'ボールと同時に見せない', `振り上げの時の角度は${a}°。DFの前にいて、ボールと一緒に見られていた`]);
+      if (r.runT === null) items.push(['b', '視線を盗む', '飛び出しがなかった']);
+      else if (!r.runSeen) items.push(['g', '視線を盗む', 'DFがボールを見ている間に走り出せた']);
+      else items.push(['b', '視線を盗む', '走り出しをDFに見られていた。DFがボールの方を向いた瞬間に出よう']);
+      if (r.offside) items.push(['b', '飛び出しのタイミング', 'パスが出た瞬間にDFより前にいた（オフサイド）。DFと横並びで待って、振り上げで出よう']);
+      else if (r.runT === null) items.push(['b', '飛び出しのタイミング', '振り上げに反応できなかった。味方の足が後ろに上がったら合図']);
+      else {
+        const rt = r.runT - r.windT;
+        if (rt < -0.15) items.push(['m', '飛び出しのタイミング', `振り上げより${(-rt).toFixed(1)}秒早く走り出した。早すぎるとDFに読まれる`]);
+        else if (rt <= 0.45) items.push(['g', '飛び出しのタイミング', `振り上げから${Math.max(0, rt).toFixed(2)}秒で反応できた`]);
+        else if (rt <= 0.8) items.push(['m', '飛び出しのタイミング', `反応まで${rt.toFixed(2)}秒。もう少し早く`]);
+        else items.push(['b', '飛び出しのタイミング', `反応まで${rt.toFixed(2)}秒。遅い。振り上げを見たらすぐ`]);
+      }
+      const sc = (r.defChecks >= 2) + r.sawBall;
+      items.push([sc === 2 ? 'g' : sc === 1 ? 'm' : 'b', '首振り',
+        sc === 2 ? `パスの前に、DFを${r.defChecks}回とボールを確認できた`
+          : !r.sawBall ? 'ボール（味方）を見ていなかった。振り上げはボールを見ていないと分からない'
+          : `パスの前にDFを確認したのは${r.defChecks}回。2回以上首を振ろう`]);
+      return items;
+    },
+    outcome() {
+      const o = rep.outcome;
+      if (o === 'received') return ['抜け出し成功！', 'DFの視線の外から飛び出して、裏へのパスに先にさわれた。'];
+      if (o === 'offside') return ['オフサイド', 'パスが出た瞬間に、DFよりゴール側にいた。'];
+      return ['DFに先にさわられた', rep.runT === null ? '飛び出さなかったので、DFがボールを拾った。'
+        : rep.runSeen ? '飛び出しをDFに見られて、先に戻られた。' : '飛び出しが遅れて、ボールに間に合わなかった。'];
+    },
+    snap() {
+      const g = rep && rep.gaze != null ? rep.gaze : mate.facing;
+      return {
+        dots: [[holder.pos.x, holder.pos.z, '#3d8bff'], [mate.pos.x, mate.pos.z, '#e2474b'], [ball.position.x, ball.position.z, '#ffffff', 0.55]],
+        gazes: [[mate.pos.x, mate.pos.z, g]], cones: [[mate.pos.x, mate.pos.z, g, DF_HALF, 9]], hline: mate.pos.z, myHalf: VIEW,
+      };
+    },
+  };
+
+  const DRILLS = { cut, mark, run };
+
+  // ---------- result ----------
   function showResult() {
-    const [title, why0] = OUT[rep.outcome];
-    let why = why0;
-    if (rep.outcome === 'passed') why = `${sideJ[rep.passTo]}の受け手へのコースが空いていた。` + (rep.passTo === rep.side ? '危ない側を体で切れていなかった。' : '反対側を味方にまかせられていなかった。');
+    const [title, why] = drill.outcome();
     $('resTitle').textContent = title; $('resWhy').textContent = why;
     $('items').innerHTML = '';
-    for (const [m, name, text] of grade()) {
+    for (const [m, name, text] of drill.items()) {
       const el = document.createElement('div'); el.className = 'item';
       const mk = document.createElement('div'); mk.className = 'mark ' + m; mk.textContent = m === 'g' ? '○' : m === 'm' ? '△' : '×';
       const tx = document.createElement('div'); const b = document.createElement('b'); b.textContent = name;
@@ -575,27 +919,27 @@ body {
     $('result').hidden = false;
     startReplay();
   }
-  $('next').addEventListener('click', () => { $('result').hidden = true; stopReplay(); newRep(); });
-  $('toMenu').addEventListener('click', () => { $('result').hidden = true; stopReplay(); $('start').hidden = false; });
+  $('next').addEventListener('click', () => { $('result').hidden = true; stopReplay(); startRep(); });
+  $('toMenu').addEventListener('click', () => { $('result').hidden = true; stopReplay(); $('start').hidden = false; $('meter').hidden = true; });
 
   // ---------- replay (top view) ----------
   const rc = $('replay'), rg = rc.getContext('2d');
   let replayRAF = 0;
   function startReplay() {
-    const frames = rep.rec; let i = 0, acc = 0, last = performance.now();
+    const frames = rep.rec, win = drill.replayWin; let i = 0, acc = 0, last = performance.now();
     const loop = now => {
       acc += now - last; last = now;
       while (acc > 100) { acc -= 100; i++; if (i >= frames.length + 12) i = 0; }
       const k = Math.min(i, frames.length - 1);
-      drawTop(rg, rc.width, rc.height, frames[k], { x0: -14, x1: 14, z0: -10, z1: 14 }, frames.slice(0, k + 1));
+      drawTop(rg, rc.width, rc.height, frames[k], win, frames.slice(0, k + 1));
       replayRAF = requestAnimationFrame(loop);
     };
     replayRAF = requestAnimationFrame(loop);
   }
   function stopReplay() { cancelAnimationFrame(replayRAF); }
 
-  // shared top-down renderer (minimap + replay)
-  function drawTop(g, W, H, f, win, trail) {
+  // shared top-down renderer (minimap + replay). Frames come from snapshot()
+  function drawTop(g, W, H, f, win, trail, opt) {
     const s = Math.min(W / (win.x1 - win.x0), H / (win.z1 - win.z0));
     const ox = (W - (win.x1 - win.x0) * s) / 2, oz = (H - (win.z1 - win.z0) * s) / 2;
     const X = x => ox + (x - win.x0) * s, Y = z => oz + (z - win.z0) * s;
@@ -603,31 +947,67 @@ body {
     g.strokeStyle = 'rgba(255,255,255,.3)'; g.lineWidth = 2;
     g.strokeRect(X(-20.15), Y(26 - 16.5), 40.3 * s, 16.5 * s);
     if (!f) return;
-    for (const k of ['L', 'R']) { // passing lanes from the ball holder
+    const hideHelp = opt && opt.noHelp;
+    (f.lines || []).forEach(([x1, z1, x2, z2]) => { // passing lanes
       g.strokeStyle = 'rgba(255,143,143,.35)'; g.setLineDash([6, 6]); g.beginPath();
-      g.moveTo(X(f.h[0]), Y(f.h[1])); g.lineTo(X(f[k][0]), Y(f[k][1])); g.stroke(); g.setLineDash([]);
+      g.moveTo(X(x1), Y(z1)); g.lineTo(X(x2), Y(z2)); g.stroke(); g.setLineDash([]);
+    });
+    if (f.hline != null && !hideHelp) { // offside line
+      g.strokeStyle = 'rgba(255,255,255,.55)'; g.lineWidth = 1.5; g.setLineDash([4, 5]); g.beginPath();
+      g.moveTo(X(win.x0), Y(f.hline)); g.lineTo(X(win.x1), Y(f.hline)); g.stroke(); g.setLineDash([]);
     }
-    const half = 30 * deg; // your central view
+    if (!hideHelp) (f.cones || []).forEach(([x, z, a, h, len]) => { // what an opponent can see
+      g.fillStyle = 'rgba(226,71,75,.25)'; g.beginPath(); g.moveTo(X(x), Y(z));
+      for (let i = 0; i <= 12; i++) { const b = a - h + 2 * h * i / 12; g.lineTo(X(x + Math.sin(b) * len), Y(z + Math.cos(b) * len)); }
+      g.closePath(); g.fill();
+    });
+    const half = f.myHalf || 30 * deg; // your central view
     const fwd = a => [X(f.me[0] - Math.sin(a) * 9), Y(f.me[1] - Math.cos(a) * 9)];
     g.fillStyle = 'rgba(255,210,63,.28)'; g.beginPath(); g.moveTo(X(f.me[0]), Y(f.me[1]));
     const [ax, ay] = fwd(f.yaw - half), [bx, by] = fwd(f.yaw + half);
     g.lineTo(ax, ay); g.lineTo(bx, by); g.closePath(); g.fill();
-    g.strokeStyle = 'rgba(255,143,143,.95)'; g.lineWidth = 2; g.beginPath(); // holder's gaze
-    g.moveTo(X(f.h[0]), Y(f.h[1])); g.lineTo(X(f.h[0] + Math.sin(f.hy) * 4), Y(f.h[1] + Math.cos(f.hy) * 4)); g.stroke();
+    (f.gazes || []).forEach(([x, z, a]) => { // opponents' gaze
+      g.strokeStyle = 'rgba(255,143,143,.95)'; g.lineWidth = 2; g.beginPath();
+      g.moveTo(X(x), Y(z)); g.lineTo(X(x + Math.sin(a) * 4), Y(z + Math.cos(a) * 4)); g.stroke();
+    });
     if (trail && trail.length > 1) {
       g.strokeStyle = 'rgba(255,210,63,.7)'; g.lineWidth = 2; g.beginPath();
       trail.forEach((t, i) => i ? g.lineTo(X(t.me[0]), Y(t.me[1])) : g.moveTo(X(t.me[0]), Y(t.me[1]))); g.stroke();
     }
-    const dot = (p, c, r) => { g.fillStyle = c; g.beginPath(); g.arc(X(p[0]), Y(p[1]), r, 0, Math.PI * 2); g.fill(); };
     const r = Math.max(5, s * 0.45);
-    dot(f.h, '#e2474b', r); dot(f.L, '#e2474b', r); dot(f.R, '#e2474b', r);
-    dot(f.m, '#3d8bff', r); dot(f.b, '#ffffff', r * 0.55); dot(f.me, '#ffd23f', r * 1.1);
+    const dot = (x, z, c, k) => { g.fillStyle = c; g.beginPath(); g.arc(X(x), Y(z), r * (k || 1), 0, Math.PI * 2); g.fill(); };
+    (f.dots || []).forEach(([x, z, c, k]) => dot(x, z, c, k));
+    dot(f.me[0], f.me[1], '#ffd23f', 1.1);
   }
   const mm = $('minimap'), mg = mm.getContext('2d');
-  function snapshot() {
-    return { me: [me.pos.x, me.pos.z], yaw: cameraYaw(), h: [holder.pos.x, holder.pos.z], hy: holder.facing + holder.headYaw,
-      L: [recv.L.pos.x, recv.L.pos.z], R: [recv.R.pos.x, recv.R.pos.z], m: [mate.pos.x, mate.pos.z], b: [ball.position.x, ball.position.z] };
+  function snapshot() { return Object.assign({ me: [me.pos.x, me.pos.z], yaw: cameraYaw() }, drill.snap()); }
+
+  // ---------- menu ----------
+  function startRep() {
+    drill.start();
+    $('meter').hidden = drillKey !== 'mark';
+    needsRecenter = true;
+    banner('', 0);
   }
+  function selectDrill(k) {
+    drillKey = k; drill = DRILLS[k];
+    document.querySelectorAll('[data-drill]').forEach(x => x.classList.toggle('sel', x.dataset.drill === k));
+    $('lead').textContent = drill.lead;
+    $('intro').innerHTML = drill.intro.map(t => `<li>${t}</li>`).join('');
+    $('levelNote').textContent = drill.levels[level].note;
+    const tb = document.createElement('b'); tb.textContent = drill.name;
+    $('task').replaceChildren(tb, '　' + drill.task);
+    $('mic').hidden = !drill.voice;
+    syncCalls(); showTally();
+    drill.start(); rep.phase = 'ended'; // idle scene behind the start card
+    needsRecenter = true;
+  }
+  document.querySelectorAll('[data-drill]').forEach(b => b.addEventListener('click', () => selectDrill(b.dataset.drill)));
+  document.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => {
+    level = +b.dataset.level;
+    document.querySelectorAll('[data-level]').forEach(x => x.classList.toggle('sel', x === b));
+    $('levelNote').textContent = drill.levels[level].note;
+  }));
 
   // ---------- start ----------
   const note = $('note');
@@ -637,8 +1017,8 @@ body {
       ? '体ごと回って見回す ・ 左でスティック移動 ・ 右ドラッグで向きの微調整'
       : '左でスティック移動 ・ 右をドラッグで見回す';
     try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (_) {}
-    if (!rec) startVoice();
-    newRep();
+    if (!rec && drill.voice) startVoice();
+    startRep();
   }
   $('startTouch').addEventListener('click', () => begin('touch'));
   $('startGyro').addEventListener('click', async () => {
@@ -672,6 +1052,7 @@ body {
     me.pos.x = Math.max(-FW / 2 + 0.5, Math.min(FW / 2 - 0.5, me.pos.x));
     me.pos.z = Math.max(-FL / 2 + 0.5, Math.min(FL / 2 - 0.5, me.pos.z));
     others.forEach(p => {
+      if (!p.active) return;
       const dx = me.pos.x - p.pos.x, dz = me.pos.z - p.pos.z, d = Math.hypot(dx, dz);
       if (d < 0.6 && d > 0.0001) { me.pos.x = p.pos.x + dx / d * 0.6; me.pos.z = p.pos.z + dz / d * 0.6; }
     });
@@ -684,16 +1065,25 @@ body {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   }
   addEventListener('resize', resize); resize();
-  newRep(); rep.phase = 'ended'; // idle scene behind the start card
+  selectDrill('cut');
   ball.position.set(0, 0.11, -5.55);
   let last = performance.now();
   function frame(now) {
     const dt = Math.min(0.05, (now - last) / 1000); last = now;
-    if (rep.phase !== 'ended') updateDrill(dt);
-    others.forEach(p => { p.g.position.copy(p.pos); p.g.rotation.y = p.facing; p.head.rotation.y = p.headYaw; });
+    if (rep.phase !== 'ended') {
+      drill.update(dt);
+      // record for the replay
+      rep.recT += dt;
+      if (rep.recT >= 0.1 && rep.phase !== 'ended') { rep.recT = 0; rep.rec.push(snapshot()); }
+    }
+    others.forEach(p => {
+      if (p !== holder || rep.phase !== 'windup') p.legs[1].rotation.x *= 0.9;
+      if (!p.active) return;
+      p.g.position.copy(p.pos); p.g.rotation.y = p.facing; p.head.rotation.y = p.headYaw;
+    });
     applyLook();
     updateMe(dt);
-    drawTop(mg, mm.width, mm.height, snapshot(), { x0: -16, x1: 16, z0: -12, z1: 16 });
+    drawTop(mg, mm.width, mm.height, snapshot(), drill.mapWin, null, { noHelp: drillKey === 'run' && !RUN_LV[level].cone });
     if (bannerT > 0) { bannerT -= dt; if (bannerT <= 0) $('banner').hidden = true; }
     renderer.render(scene, camera);
     requestAnimationFrame(frame);
@@ -701,6 +1091,9 @@ body {
   requestAnimationFrame(frame);
 
   // hook for automated checks
-  window.__drill = { me, rep: () => rep, makeCall, setYaw: y => { yawOffset = y; }, keys };
+  window.__drill = {
+    me, rep: () => rep, makeCall, setYaw: y => { yawOffset = y; }, keys, cameraYaw, yawTo,
+    holder, recv, mate, ball, select: selectDrill, start: startRep, level: l => { level = l; },
+  };
 })();
 </script>
