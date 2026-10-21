@@ -184,11 +184,16 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
     <div class="row">
       <button class="btn" id="startVR" type="button">VRゴーグルで始める</button>
     </div>
-    <div class="levels">ゴーグルで進む方法
-      <button class="btn sel" type="button" data-walk="hold">ボタン長押し</button>
-      <button class="btn" type="button" data-walk="step">足ぶみ（ためし）</button>
+    <div class="levels">足ぶみで進む
+      <button class="btn sel" type="button" id="stepToggle">オン</button>
     </div>
-    <p>VRゴーグル：横向きにしてから押し、モーションとマイクを許可してゴーグルにはめる。メニューは声で <span class="say">「スタート」</span> <span class="say">「つぎ」</span> <span class="say">「メニュー」</span> <span class="say">「レベル2」</span>、ゴーグルのボタンでも決定できます。</p>
+    <div class="levels"><label for="ipd">レンズの間隔</label>
+      <input type="range" id="ipd" min="50" max="75" step="1"> <span id="ipdVal"></span>
+    </div>
+    <div class="levels"><label for="vshift">画面の上下</label>
+      <input type="range" id="vshift" min="-15" max="15" step="1"> <span id="vshiftVal"></span>
+    </div>
+    <p>VRゴーグル：横向きにしてから押し、モーションとマイクを許可してゴーグルにはめる。メニューは声で <span class="say">「スタート」</span> <span class="say">「つぎ」</span> <span class="say">「メニュー」</span> <span class="say">「レベル2」</span>、ゴーグルのボタンでも決定できます。二重に見えるときは声で <span class="say">「ひろく」</span> <span class="say">「せまく」</span>（左右）<span class="say">「うえ」</span> <span class="say">「した」</span>（上下）で合わせます。iPhoneは「ホーム画面に追加」から開くと全画面になって合わせやすくなります。</p>
     <div id="note"></div>
   </div>
 </div>
@@ -406,6 +411,10 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
     level:    ['レベル', 'れべる'],           // followed by 1/2/3 (いち・に・さん / ワン・ツー・スリー also work)
     recenter: ['正面', 'しょうめん'],
     vrOff:    ['ゴーグル終了', 'ゴーグルおわり', 'VR終了', 'ブイアール終了'],
+    wider:    ['ひろく', '広く', 'ひろげ', '広げ'],   // goggle fit (menu only): picture centres apart / together / up / down
+    narrower: ['せまく', '狭く', 'せばめ', '狭め'],
+    up:       ['うえ', '上'],
+    down:     ['した', '下'],
   };
   const has = (txt, k) => VOICE[k].some(w => txt.includes(w));
   function parseSide(txt) {
@@ -429,6 +438,12 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
     if (has(txt, 'recenter') && once('recenter')) needsRecenter = true;
     if (st === 'menu') {
       const lv = parseLevel(txt); if (lv && once('lv' + lv)) setLevel(lv);
+      if (vr) {
+        if (has(txt, 'wider') && once('wider')) setFit({ ipd: vrCfg.ipd + 2 });
+        if (has(txt, 'narrower') && once('narrower')) setFit({ ipd: vrCfg.ipd - 2 });
+        if (has(txt, 'up') && once('up')) setFit({ vshift: vrCfg.vshift + 2 });
+        if (has(txt, 'down') && once('down')) setFit({ vshift: vrCfg.vshift - 2 });
+      }
       if (has(txt, 'start') && once('start')) primary();
     } else if (st === 'result') {
       if (has(txt, 'menu') && once('menu')) toMenu();
@@ -748,11 +763,12 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
   async function enableGyro() {
     if (devOri) return true;
     try {
-      const perms = [];
-      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') perms.push(DeviceOrientationEvent.requestPermission());
-      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') perms.push(DeviceMotionEvent.requestPermission().catch(() => 'denied'));
-      const r = await Promise.all(perms);
-      if (r.length && r[0] !== 'granted') return false;
+      // ask for motion first: on iOS it is the same "Motion & Orientation" prompt, and asking for both at once
+      // could leave motion (needed for step-in-place) silently denied
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') await DeviceMotionEvent.requestPermission().catch(() => 'denied');
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        if (await DeviceOrientationEvent.requestPermission() !== 'granted') return false;
+      }
       addEventListener('deviceorientation', onOri);
       addEventListener('devicemotion', onMotion);
       return await new Promise(res => { const t0 = performance.now(); (function chk() { if (devOri) return res(true); if (performance.now() - t0 > 1200) return res(false); requestAnimationFrame(chk); })(); });
@@ -773,10 +789,9 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
     if (!(await enableGyro())) { banner('ジャイロが使えません', 1.5); return; }
     mode = 'gyro'; enterVR();
   });
-  document.querySelectorAll('[data-walk]').forEach(b => b.addEventListener('click', () => {
-    walkMode = b.dataset.walk;
-    document.querySelectorAll('[data-walk]').forEach(x => x.classList.toggle('sel', x === b));
-  }));
+  $('stepToggle').addEventListener('click', () => setFit({ step: !vrCfg.step }));
+  $('ipd').addEventListener('input', e => setFit({ ipd: +e.target.value }));
+  $('vshift').addEventListener('input', e => setFit({ vshift: +e.target.value }));
 
   // ---------- movement ----------
   function updateMe(dt) {
@@ -811,8 +826,30 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
 
   // ---------- VR goggles (phone in a Cardboard-style viewer) ----------
   // iOS Safari has no WebXR, so we draw the two eyes side by side ourselves and look around with the gyro.
-  let vr = false, walkMode = 'hold', walking = false, walkYaw = 0;
+  let vr = false, walking = false, walkYaw = 0;
+  // Goggle fit. Each lens must sit over the centre of its picture: if the two picture centres are further apart
+  // than the lenses (half the screen width is ~73 mm on an iPhone, lenses are ~60-65 mm apart) the eyes can't
+  // fuse them and you see double. ipd = lens centre distance in mm, vshift = picture height offset in mm.
+  const PX_PER_MM = 6.1; // CSS px per mm on recent iPhones (~460 ppi at 3x); the ipd setting absorbs the error
+  const vrCfg = { ipd: 62, vshift: 0, step: true };
+  try { Object.assign(vrCfg, JSON.parse(localStorage.getItem('shikaku-vr') || '{}')); } catch (_) {}
+  function setFit(c) {
+    Object.assign(vrCfg, c);
+    vrCfg.ipd = Math.max(50, Math.min(75, vrCfg.ipd)); vrCfg.vshift = Math.max(-15, Math.min(15, vrCfg.vshift));
+    try { localStorage.setItem('shikaku-vr', JSON.stringify(vrCfg)); } catch (_) {}
+    $('ipd').value = vrCfg.ipd; $('ipdVal').textContent = vrCfg.ipd + 'mm';
+    $('vshift').value = vrCfg.vshift; $('vshiftVal').textContent = (vrCfg.vshift > 0 ? '+' : '') + vrCfg.vshift + 'mm';
+    $('stepToggle').textContent = vrCfg.step ? 'オン' : 'オフ'; $('stepToggle').classList.toggle('sel', vrCfg.step);
+    resize();
+  }
+  // left eye's viewport, centred under the left lens; the right eye mirrors it
+  function eyeRect() {
+    const W = innerWidth, H = innerHeight, cx = W / 2 - vrCfg.ipd * PX_PER_MM / 2;
+    const r = Math.max(60, Math.min(cx, W / 2 - cx));
+    return { x: cx - r, y: vrCfg.vshift * PX_PER_MM, w: 2 * r, h: H };
+  }
   const stereo = new THREE.StereoCamera(); stereo.eyeSep = 0.06;
+  stereo.focus = 1000; // goggle lenses put the screen at optical infinity, so the eyes' views stay parallel
   scene.add(camera); // so the head-locked panel (a child of the camera) is rendered
   function enterVR() {
     vr = true; document.body.classList.add('vr'); resize(); needsRecenter = true; hudKey = '';
@@ -833,6 +870,10 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
     vrTouch.ids.add(e.pointerId);
     if (vrTouch.ids.size === 1) { vrTouch.downAt = performance.now(); vrTouch.multi = false; } else vrTouch.multi = true;
   }
+  // a Bluetooth page-turner (presentation clicker) or keyboard works like the goggles' button
+  const CLICK_KEYS = ['Space', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown'];
+  addEventListener('keydown', e => { if (vr && CLICK_KEYS.includes(e.code)) { e.preventDefault(); if (!e.repeat) vrDown({ pointerId: 'key' }); } });
+  addEventListener('keyup', e => { if (vr && CLICK_KEYS.includes(e.code)) vrUp({ pointerId: 'key' }, true); });
   function vrUp(e, ok) {
     vrTouch.ids.delete(e.pointerId);
     if (vrTouch.ids.size || !ok) return;
@@ -841,16 +882,25 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
   }
 
   // step in place: the phone bobs up and down with each step; the bounce energy sets the speed
-  let stepE = 0;
+  let stepE = 0, motionSeen = false;
+  const grav = { x: 0, y: 0, z: 0 };
   function onMotion(e) {
-    const a = e.acceleration; if (!a || a.x === null) return;
-    const m = Math.hypot(a.x, a.y, a.z);
+    let a = e.acceleration, m;
+    if (a && a.x !== null) m = Math.hypot(a.x, a.y, a.z);
+    else {
+      // no gravity-free reading: take gravity out ourselves with a slow low-pass
+      a = e.accelerationIncludingGravity; if (!a || a.x === null) return;
+      for (const k of ['x', 'y', 'z']) grav[k] += (a[k] - grav[k]) * 0.05;
+      m = Math.hypot(a.x - grav.x, a.y - grav.y, a.z - grav.z);
+    }
+    motionSeen = true;
     stepE += (m - stepE) * 0.08;
   }
+  const STEP_ON = 1.6; // m/s² of bounce before it counts as stepping (raise it if head turns make you walk)
   function vrWalkAmount() {
     if (screenState() !== 'play') return 0;
-    if (walkMode === 'hold') return vrTouch.ids.size ? 1 : 0;
-    const STEP_ON = 1.6; // m/s² of bounce before it counts as stepping (raise it if head turns make you walk)
+    if (vrTouch.ids.size) return 1; // goggles' button / clicker held
+    if (!vrCfg.step) return 0;
     return stepE < STEP_ON ? 0 : Math.min(1, 0.4 + (stepE - STEP_ON) / 3);
   }
 
@@ -897,7 +947,8 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
   function drawHud(now) {
     const st = screenState(), portrait = innerHeight > innerWidth;
     const bannerOn = !$('banner').hidden, heardOn = !$('heard').hidden;
-    const key = [st, portrait, level, walkMode, $('micText').textContent, bannerOn && $('banner').textContent,
+    const meter = st === 'play' && vrCfg.step ? Math.min(10, Math.round(stepE / STEP_ON * 5)) : -1;
+    const key = [st, portrait, level, vrCfg.ipd, vrCfg.vshift, vrCfg.step, meter, motionSeen, $('micText').textContent, bannerOn && $('banner').textContent,
       heardOn && $('heard').textContent, st === 'result' && Math.floor((now - resultAt) / 100)].join('|');
     if (key === hudKey) return;
     hudKey = key;
@@ -911,7 +962,8 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
       const rows = [['「スタート」', 'はじめる（ボタンでもOK）'], ['「レベル1」〜「レベル3」', 'レベルをかえる'],
         ['「正面」', '向きをもどす'], ['「ゴーグル終了」', 'ふつうの画面へ']];
       rows.forEach(([say, what], i) => { txt(say, 90, 270 + i * 66, 38, Y); wrapTxt(what, 90 + Math.min(560, hg.measureText(say).width + 30), 270 + i * 66, 560, 32, W, 1); });
-      wrapTxt(`進む：${walkMode === 'hold' ? 'ボタン長押し' : '足ぶみ'}　声：${$('micText').textContent}`, 90, 560, 860, 28, D, 1);
+      wrapTxt(`二重に見えたら「ひろく」「せまく」「うえ」「した」　いま ${vrCfg.ipd}mm / ${vrCfg.vshift}mm`, 90, 538, 860, 28, Y, 1);
+      wrapTxt(`足ぶみ：${!vrCfg.step ? 'オフ' : motionSeen ? 'オン' : '動きセンサーが届いていません'}　声：${$('micText').textContent}`, 90, 580, 860, 28, D, 1);
     } else if (st === 'result') {
       panelBg(20, 20, 984, 600);
       txt($('resTitle').textContent, 512, 70, 50, W, 'center');
@@ -927,6 +979,11 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
       }
       txt('「つぎ」次の1本　「メニュー」レベルをかえる', 512, 575, 34, Y, 'center');
     } else {
+      if (meter >= 0) { // step meter: shows whether your steps are being picked up (yellow line = moves you)
+        hg.fillStyle = 'rgba(8,22,15,.7)'; hg.fillRect(362, 610, 300, 20);
+        hg.fillStyle = meter >= 5 ? '#5ee08a' : '#b9cdbf'; hg.fillRect(362, 610, 30 * meter, 20);
+        hg.fillStyle = '#ffd23f'; hg.fillRect(511, 604, 3, 32);
+      }
       if (bannerOn) { hg.shadowColor = 'rgba(0,0,0,.7)'; hg.shadowBlur = 16; txt($('banner').textContent, 512, 170, 80, W, 'center'); hg.shadowBlur = 0; }
       if (heardOn) {
         hg.font = `800 34px ${FONT}`; const t = $('heard').textContent, w = hg.measureText(t).width + 48;
@@ -939,21 +996,24 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
     if (!vr) { renderer.setViewport(0, 0, innerWidth, innerHeight); renderer.render(scene, camera); return; }
     hud.visible = true; drawHud(now);
     scene.updateMatrixWorld(); stereo.update(camera);
-    const w = innerWidth / 2, h = innerHeight;
+    const e = eyeRect(), xR = innerWidth - e.x - e.w;
+    renderer.setScissorTest(false); renderer.setViewport(0, 0, innerWidth, innerHeight);
+    renderer.setClearColor(0x000000, 1); renderer.clear(); // black around the eyes (the sky colour lingers otherwise)
     renderer.setScissorTest(true);
-    renderer.setScissor(0, 0, w, h); renderer.setViewport(0, 0, w, h); renderer.render(scene, stereo.cameraL);
-    renderer.setScissor(w, 0, w, h); renderer.setViewport(w, 0, w, h); renderer.render(scene, stereo.cameraR);
+    renderer.setScissor(e.x, e.y, e.w, e.h); renderer.setViewport(e.x, e.y, e.w, e.h); renderer.render(scene, stereo.cameraL);
+    renderer.setScissor(xR, e.y, e.w, e.h); renderer.setViewport(xR, e.y, e.w, e.h); renderer.render(scene, stereo.cameraR);
     renderer.setScissorTest(false);
   }
 
   // ---------- loop ----------
   function resize() {
     renderer.setSize(innerWidth, innerHeight, false);
-    camera.aspect = (vr ? innerWidth / 2 : innerWidth) / innerHeight;
+    if (vr) { const e = eyeRect(); camera.aspect = e.w / e.h; } else camera.aspect = innerWidth / innerHeight;
     camera.fov = vr ? 80 : 70; // goggle lenses widen the view
     camera.updateProjectionMatrix();
   }
   addEventListener('resize', resize); resize();
+  setFit({});
   newRep(); rep.phase = 'ended'; // idle scene behind the start card
   ball.position.set(0, 0.11, -5.55);
   let last = performance.now();
@@ -970,6 +1030,6 @@ body.vr #joyBase, body.vr #joyKnob { display: none !important; }
   requestAnimationFrame(frame);
 
   // hook for automated checks
-  window.__drill = { me, rep: () => rep, makeCall, setYaw: y => { yawOffset = y; }, keys, onVoice, enterVR, exitVR, primary, isVR: () => vr };
+  window.__drill = { me, rep: () => rep, makeCall, setYaw: y => { yawOffset = y; }, keys, onVoice, enterVR, exitVR, primary, isVR: () => vr, onMotion, vrCfg };
 })();
 </script>
